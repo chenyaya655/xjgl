@@ -50,3 +50,18 @@ public interface IPhotoStorage
 
     Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// 照片内容的读取能力。
+///
+/// 为什么单独一个接口而不是直接加到 <see cref="IPhotoStorage"/>：
+/// 上传链路只需要「写」，把「读」强加到同一个接口上，会让
+/// <see cref="ResilientPhotoStorage"/> 的语义变模糊（读该走主还是降级？），
+/// 也会逼所有测试替身都去实现一个用不到的方法。
+/// 目前只有补偿回放需要读 —— 而且它明确只读**本地降级区**。
+/// </summary>
+public interface IPhotoBlobReader
+{
+    /// <summary>打开只读流；文件不存在返回 <c>null</c>。</summary>
+    Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default);
+}

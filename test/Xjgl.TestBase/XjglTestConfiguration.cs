@@ -20,6 +20,23 @@ public static class XjglTestConfiguration
             ? cs
             : DefaultConnectionString;
 
+    /// <summary>
+    /// 照片测试的存储根目录（在测试输出目录下，测试运行时可任意增删）。
+    ///
+    /// 测试**不碰真实 NAS**：把「NAS 主存储」的根目录指到一个本地目录，
+    /// 需要模拟 NAS 故障时就把这个目录换成一个同名文件 ——
+    /// 目录创建必然失败，于是写入失败、熔断、降级全部真实发生，
+    /// 而恢复只需把文件删掉。这样能在毫秒级、可重复地演练完整的故障链路。
+    /// </summary>
+    public static string PhotoBaseDirectory { get; } =
+        Path.Combine(AppContext.BaseDirectory, "App_Data", "photo-tests");
+
+    /// <summary>模拟 NAS 主存储的根目录。</summary>
+    public static string NasRoot => Path.Combine(PhotoBaseDirectory, "nas");
+
+    /// <summary>降级存储根目录。</summary>
+    public static string FallbackRoot => Path.Combine(PhotoBaseDirectory, "fallback");
+
     public static IConfigurationRoot Build()
     {
         return new ConfigurationBuilder()
@@ -30,7 +47,18 @@ public static class XjglTestConfiguration
                 ["Xjgl:SqlSugar:DbType"] = "PostgreSQL",
                 ["Xjgl:SqlSugar:UseSnakeCaseTableName"] = "true",
                 ["Xjgl:SqlSugar:CommandTimeoutSeconds"] = "60",
-                ["Xjgl:SqlSugar:EnableSqlLog"] = "false"
+                ["Xjgl:SqlSugar:EnableSqlLog"] = "false",
+
+                // 照片存储：把 NAS 主存储指向本地目录，测试里可以随时「弄坏/修好」它
+                ["Xjgl:Photo:NasRoot"] = NasRoot,
+                ["Xjgl:Photo:FallbackRoot"] = FallbackRoot,
+                ["Xjgl:Photo:BulkheadSize"] = "4",
+                ["Xjgl:Photo:TimeoutSeconds"] = "10",
+
+                // 熔断参数调小，让测试能在几百毫秒内观察到「熔断→恢复」
+                ["Xjgl:Photo:MinimumSamples"] = "3",
+                ["Xjgl:Photo:FailureRateThreshold"] = "0.5",
+                ["Xjgl:Photo:OpenSeconds"] = "1"
             })
             .Build();
     }

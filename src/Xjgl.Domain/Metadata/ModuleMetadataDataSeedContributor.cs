@@ -99,7 +99,8 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
         await AddSubsystemAsync("Pho", "照片管理", "Picture", 40, new[]
         {
             Module("Photo", "照片管理", "/photo/list", "photo/list/index", "PictureFilled", 10,
-                Action("Query", "查看"), Action("Upload", "上传"), Action("Delete", "删除"), Action("Export", "导出"))
+                Action("Query", "查看"), Action("Upload", "上传"), Action("Delete", "删除"), Action("Export", "导出"),
+                Action("Compensate", "存储补偿"))
         });
 
         var subsystemCount = await _subsystems.GetCountAsync();

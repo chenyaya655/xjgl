@@ -29,6 +29,7 @@ using Volo.Abp.VirtualFileSystem;
 using Xjgl.Caching;
 using Xjgl.Data;
 using Xjgl.EntityFrameworkCore;
+using Xjgl.Photos;
 using Xjgl.SqlSugarCore;
 
 namespace Xjgl;
@@ -150,6 +151,7 @@ public class XjglHttpApiHostModule : AbpModule
         ConfigureVirtualFileSystem(hostingEnvironment);
         ConfigureCors(context, configuration);
         ConfigureSwaggerServices(context, configuration);
+        ConfigurePhotoCompensationWorker(context);
 
         Configure<AbpDistributedCacheOptions>(options =>
         {
@@ -168,6 +170,18 @@ public class XjglHttpApiHostModule : AbpModule
             // 应用服务按约定自动生成 Controller：XxxAppService -> /api/app/xxx
             options.ConventionalControllers.Create(typeof(XjglApplicationModule).Assembly);
         });
+    }
+
+    /// <summary>
+    /// 注册「降级照片回放」后台任务。
+    ///
+    /// 熔断降级保证上传不失败，但照片终究要回到 NAS；
+    /// 这个任务负责在 NAS 恢复后把本地暂存的照片补传回去。
+    /// 可通过 <c>Xjgl:Photo:CompensationEnabled=false</c> 关闭（例如只在某个实例上跑）。
+    /// </summary>
+    private static void ConfigurePhotoCompensationWorker(ServiceConfigurationContext context)
+    {
+        context.Services.AddHostedService<PhotoCompensationWorker>();
     }
 
     /// <summary>

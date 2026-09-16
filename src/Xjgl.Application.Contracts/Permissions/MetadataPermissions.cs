@@ -125,6 +125,9 @@ public static class MetadataPermissions
             public const string Upload = "Pho.Photo.Upload";
             public const string Delete = "Pho.Photo.Delete";
             public const string Export = "Pho.Photo.Export";
+
+            /// <summary>触发「降级照片回放 NAS」的补偿操作，属于运维动作，通常只授给管理员。</summary>
+            public const string Compensate = "Pho.Photo.Compensate";
         }
     }
 }
