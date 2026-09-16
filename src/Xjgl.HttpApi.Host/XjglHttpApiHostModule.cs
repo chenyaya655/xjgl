@@ -1,8 +1,14 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
@@ -13,12 +19,14 @@ using Volo.Abp.Autofac;
 using Volo.Abp.Caching;
 using Volo.Abp.Caching.StackExchangeRedis;
 using Volo.Abp.EventBus.RabbitMq;
+using Volo.Abp.Identity.AspNetCore;
 using Volo.Abp.Modularity;
 using Volo.Abp.OpenIddict;
 using Volo.Abp.Security.Claims;
 using Volo.Abp.Swashbuckle;
 using Volo.Abp.UI.Navigation.Urls;
 using Volo.Abp.VirtualFileSystem;
+using Xjgl.Caching;
 using Xjgl.Data;
 using Xjgl.EntityFrameworkCore;
 using Xjgl.SqlSugarCore;
@@ -36,6 +44,8 @@ namespace Xjgl;
     typeof(AbpCachingStackExchangeRedisModule),
     typeof(AbpEventBusRabbitMqModule),
     typeof(AbpOpenIddictAspNetCoreModule),
+    // 密码模式登录需要 SignInManager / UserManager 的 ASP.NET Core 集成
+    typeof(AbpIdentityAspNetCoreModule),
     typeof(XjglHttpApiModule),
     typeof(XjglApplicationModule),
     typeof(XjglEntityFrameworkCoreModule),
@@ -85,14 +95,40 @@ public class XjglHttpApiHostModule : AbpModule
                 XjglConsts.ApiScope);
         });
 
-        if (!hostingEnvironment.IsDevelopment())
+        if (hostingEnvironment.IsDevelopment())
+        {
+            // 开发环境使用进程内的临时密钥，**不读写 Windows 证书存储**。
+            //
+            // 原因：OpenIddict 的 AddDevelopmentEncryptionCertificate/SigningCertificate 会调用
+            // X509Store.Open() 访问系统证书存储，在受限环境与容器里会抛
+            //   CryptographicException: 拒绝访问
+            // 表现为每个请求都 500。临时密钥的代价是重启后旧令牌失效，开发环境可以接受。
+            PreConfigure<AbpOpenIddictAspNetCoreOptions>(options =>
+            {
+                options.AddDevelopmentEncryptionAndSigningCertificate = false;
+            });
+
+            PreConfigure<OpenIddictServerBuilder>(serverBuilder =>
+            {
+                serverBuilder.AddEphemeralEncryptionKey();
+                serverBuilder.AddEphemeralSigningKey();
+
+                // OpenIddict 默认要求令牌端点必须走 HTTPS，
+                // 本地用 http://localhost 调试时会被 ValidateTransportSecurityRequirement 拒绝，
+                // 表现为 /connect/token 直接返回错误响应。开发环境显式放行。
+                // 生产环境务必保持启用（走 Nginx/网关的 TLS）。
+                serverBuilder.UseAspNetCore().DisableTransportSecurityRequirement();
+            });
+        }
+        else
         {
             PreConfigure<AbpOpenIddictAspNetCoreOptions>(options =>
             {
                 options.AddDevelopmentEncryptionAndSigningCertificate = false;
             });
 
-            // 生产环境请替换为自己的证书文件，并通过环境变量注入口令
+            // 生产环境从应用目录读取证书文件（不要提交到仓库，见 .gitignore 的 *.pfx）。
+            // 证书口令通过配置或环境变量注入：OpenIddict:Certificate:Password
             PreConfigure<OpenIddictServerBuilder>(serverBuilder =>
             {
                 serverBuilder.AddProductionEncryptionAndSigningCertificate(
@@ -109,6 +145,8 @@ public class XjglHttpApiHostModule : AbpModule
 
         ConfigureAuthentication(context);
         ConfigureConventionalControllers();
+        ConfigureDataProtection(context, hostingEnvironment);
+        ConfigureResilientDistributedCache(context);
         ConfigureVirtualFileSystem(hostingEnvironment);
         ConfigureCors(context, configuration);
         ConfigureSwaggerServices(context, configuration);
@@ -129,6 +167,64 @@ public class XjglHttpApiHostModule : AbpModule
         {
             // 应用服务按约定自动生成 Controller：XxxAppService -> /api/app/xxx
             options.ConventionalControllers.Create(typeof(XjglApplicationModule).Assembly);
+        });
+    }
+
+    /// <summary>
+    /// 数据保护密钥的存放位置。
+    ///
+    /// 默认行为是写到 %LOCALAPPDATA%\ASP.NET\DataProtection-Keys，
+    /// 这在容器化部署（方案第 10 章：Linux + Docker/K8s）和受限环境下都会出问题：
+    /// 容器重建后密钥丢失导致已签发的 Cookie / Token 全部失效，
+    /// 受限环境则直接抛 CryptographicException「拒绝访问」。
+    ///
+    /// 因此改为落在应用目录下的 App_Data/DataProtection-Keys（该目录已在 .gitignore 中）。
+    /// 生产环境如需多副本共享，可改为 PersistKeysToStackExchangeRedis 或挂载卷。
+    /// </summary>
+    private static void ConfigureDataProtection(
+        ServiceConfigurationContext context,
+        IWebHostEnvironment hostingEnvironment)
+    {
+        var keysDirectory = new DirectoryInfo(
+            Path.Combine(hostingEnvironment.ContentRootPath, "App_Data", "DataProtection-Keys"));
+
+        if (!keysDirectory.Exists)
+        {
+            keysDirectory.Create();
+        }
+
+        context.Services
+            .AddDataProtection()
+            .SetApplicationName("Xjgl")
+            .PersistKeysToFileSystem(keysDirectory);
+    }
+
+    /// <summary>
+    /// 把 IDistributedCache 换成容错装饰器：Redis 不可用时自动降级为进程内内存缓存。
+    ///
+    /// 为什么必须替换而不能只靠 AbpDistributedCacheOptions.HideErrors：
+    /// 该开关只对 ABP 包装的 IDistributedCache&lt;T&gt; 生效，
+    /// 而 SettingManagement / PermissionManagement / FeatureManagement 的内部初始化器
+    /// 直接使用原生 IDistributedCache，Redis 抛异常会直接变成 500。
+    /// </summary>
+    private static void ConfigureResilientDistributedCache(ServiceConfigurationContext context)
+    {
+        // 先注册兜底实现（内存缓存），再注册主实现（Redis），最后由装饰器包住两者。
+        // 注意注册顺序：后注册的才是解析 IDistributedCache 时拿到的那个。
+        context.Services.AddDistributedMemoryCache();
+
+        context.Services.AddSingleton<IDistributedCache>(serviceProvider =>
+        {
+            var redisOptions = serviceProvider.GetRequiredService<IOptions<RedisCacheOptions>>();
+            var memoryOptions = serviceProvider.GetRequiredService<IOptions<MemoryDistributedCacheOptions>>();
+
+            IDistributedCache primary = new RedisCache(redisOptions);
+            IDistributedCache fallback = new MemoryDistributedCache(memoryOptions);
+
+            return new ResilientDistributedCache(
+                primary,
+                fallback,
+                serviceProvider.GetRequiredService<ILogger<ResilientDistributedCache>>());
         });
     }
 
