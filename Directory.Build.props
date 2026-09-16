@@ -1,0 +1,24 @@
+<Project>
+
+  <!--
+    解决方案级公共 MSBuild 属性。
+    放在仓库根目录，MSBuild 会自动向上查找并应用到所有项目，
+    因此各 .csproj 无需重复 Import（比 ABP 模板的 common.props 更省事）。
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Version>1.0.0</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AbpProjectType>app</AbpProjectType>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!-- 统一版本号：升级 ABP 只需改这里 -->
+    <AbpVersion>10.6.0</AbpVersion>
+    <DotNetExtVersion>10.0.12</DotNetExtVersion>
+    <SqlSugarVersion>5.1.4.221</SqlSugarVersion>
+  </PropertyGroup>
+
+</Project>

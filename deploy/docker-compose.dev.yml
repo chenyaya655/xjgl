@@ -1,0 +1,128 @@
+# 河南省学籍管理系统 —— WSL2 开发环境
+#
+# 在 WSL 中执行：
+#   cd /mnt/d/StudentManagement/deploy
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml ps
+#
+# 说明：
+#   - WSL2 会把容器端口转发到 Windows 宿主机的 localhost，
+#     所以在 Windows 上跑 `dotnet run` 可直接连 localhost:5432 / 6379 / 5672。
+#   - 若不通，用 `wsl hostname -I` 取 WSL IP，写入 appsettings.Development.json。
+#   - 所有数据都在命名卷里，`down` 不会丢；`down -v` 才会清空。
+
+name: xjgl-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xjgl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: xjgl
+      POSTGRES_USER: xjgl
+      POSTGRES_PASSWORD: Xjgl@Dev2026
+      # 中文排序 + 生僻字：初始化时使用 ICU 排序规则
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+      TZ: Asia/Shanghai
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - max_connections=200
+      - -c
+      - log_min_duration_statement=500      # 慢 SQL 日志（>500ms）
+      - -c
+      - timezone=Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - xjgl-pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xjgl -d xjgl"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: xjgl-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - Xjgl@Dev2026
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - xjgl-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "Xjgl@Dev2026", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: xjgl-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: xjgl
+      RABBITMQ_DEFAULT_PASS: Xjgl@Dev2026
+      RABBITMQ_DEFAULT_VHOST: xjgl
+      TZ: Asia/Shanghai
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # 管理台 http://localhost:15672
+    volumes:
+      - xjgl-rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # 开发期数据库可视化（http://localhost:8080，系统 PostgreSQL / 服务器 postgres / 用户 xjgl）
+  adminer:
+    image: adminer:4
+    container_name: xjgl-adminer
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 结构化日志查看（http://localhost:5341）
+  seq:
+    image: datalust/seq:latest
+    container_name: xjgl-seq
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: "true"
+    ports:
+      - "5341:80"
+    volumes:
+      - xjgl-seqdata:/data
+
+volumes:
+  xjgl-pgdata:
+  xjgl-redisdata:
+  xjgl-rabbitmqdata:
+  xjgl-seqdata:

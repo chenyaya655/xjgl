@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ★ 自研 SqlSugar 集成层。
+    职责：把 SqlSugar 接入 ABP 的依赖注入 / 工作单元 / 仓储抽象，
+          与框架模块使用的 EF Core 共存于同一个 PostgreSQL 数据库。
+    注意：本层不依赖 EF Core，避免与 Xjgl.EntityFrameworkCore 形成循环依赖。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Xjgl</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Xjgl.Domain\Xjgl.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SqlSugarCore" Version="$(SqlSugarVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="$(DotNetExtVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(DotNetExtVersion)" />
+  </ItemGroup>
+
+</Project>

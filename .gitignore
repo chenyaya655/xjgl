@@ -1,0 +1,95 @@
+# ===========================================================================
+#  河南省学籍管理系统 —— Git 忽略规则
+# ===========================================================================
+
+## ---- 构建产物 ----
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+*.dll
+*.pdb
+*.exe
+*.nupkg
+*.snupkg
+TestResults/
+*.trx
+*.coverage
+*.coverage.xml
+coverage*.json
+coverage*.xml
+
+## ---- 本机工具链缓存（受限沙箱专用，见 .tools/env.ps1）----
+.tools/
+/tools/nuget-proxy.log
+
+## ---- 本机 NuGet 配置（指向本地镜像代理，不应提交）----
+/nuget.config
+
+## ---- IDE ----
+.vs/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.sample
+!.vscode/launch.json.sample
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+*.VC.db
+*.VC.VC.opendb
+
+## ---- Node / 前端 ----
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+.eslintcache
+.stylelintcache
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+coverage/
+.nyc_output/
+unpackage/
+# uni-app / 小程序产物
+web/apps/mp/dist/
+web/apps/mp/unpackage/
+
+## ---- 密钥与连接串（政务项目：绝不入库）----
+appsettings.Secrets.json
+appsettings.*.Secrets.json
+*.pfx
+*.p12
+*.key
+*.keystore
+secrets.json
+.env
+.env.*
+!.env.example
+
+## ---- 运行期数据 ----
+logs/
+uploads/
+temp/
+tmp/
+*.log
+App_Data/
+# 照片降级补偿目录（运行期本地暂存）
+photo-fallback/
+
+## ---- 学习文档（按需求：交付给个人学习，不进开源仓库）----
+docs/learning/
+
+## ---- 操作系统 ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+*.swp
+*~
