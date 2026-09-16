@@ -1,0 +1,214 @@
+using Microsoft.Extensions.Logging;
+using Volo.Abp.Data;
+using Volo.Abp.DependencyInjection;
+using Volo.Abp.Guids;
+using Xjgl.Data;
+
+namespace Xjgl.Metadata;
+
+/// <summary>
+/// 模块元数据种子：子系统 → 模块 → 操作。
+///
+/// 权限名规则：<c>{子系统编码}.{模块编码}.{操作编码}</c>，
+/// 例如 <c>Stu.Student.Import</c>、<c>Chg.Audit.Approve</c>。
+///
+/// 这几个子系统是「内置」的：管理员可以在界面上调整名称、路径、排序、启停，
+/// 也可以新增自己的模块；种子只保证首次部署后系统可用。
+///
+/// 幂等：已存在的子系统/模块/操作不会重复插入，也不会覆盖人工修改。
+/// </summary>
+public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransientDependency
+{
+    private readonly IXjglRepository<SysSubsystem> _subsystems;
+    private readonly IXjglRepository<SysModule> _modules;
+    private readonly IXjglRepository<SysModuleAction> _actions;
+    private readonly IGuidGenerator _guidGenerator;
+    private readonly ILogger<ModuleMetadataDataSeedContributor> _logger;
+
+    public ModuleMetadataDataSeedContributor(
+        IXjglRepository<SysSubsystem> subsystems,
+        IXjglRepository<SysModule> modules,
+        IXjglRepository<SysModuleAction> actions,
+        IGuidGenerator guidGenerator,
+        ILogger<ModuleMetadataDataSeedContributor> logger)
+    {
+        _subsystems = subsystems;
+        _modules = modules;
+        _actions = actions;
+        _guidGenerator = guidGenerator;
+        _logger = logger;
+    }
+
+    public async Task SeedAsync(DataSeedContext context)
+    {
+        // ---- 系统管理 ----
+        await AddSubsystemAsync("Sys", "系统管理", "Setting", 10, new[]
+        {
+            Module("Module", "模块管理", "/system/module", "system/module/index", "Grid", 10,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除")),
+
+            Module("Permission", "权限管理", "/system/permission", "system/permission/index", "Lock", 20,
+                Action("Query", "查看"), Action("Assign", "分配权限")),
+
+            Module("User", "用户管理", "/system/user", "system/user/index", "User", 30,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Import", "导入"), Action("Export", "导出")),
+
+            Module("UserProvision", "预置与激活", "/system/user-provision", "system/user-provision/index", "UserFilled", 40,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Import", "导入")),
+
+            Module("Code", "微代码管理", "/system/code", "system/code/index", "Collection", 50,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Import", "导入"), Action("Export", "导出")),
+
+            Module("Org", "组织管理", "/system/org", "system/org/index", "OfficeBuilding", 60,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Import", "导入"), Action("Export", "导出"))
+        });
+
+        // ---- 学生管理 ----
+        await AddSubsystemAsync("Stu", "学生管理", "School", 20, new[]
+        {
+            Module("Student", "学生管理", "/student/list", "student/list/index", "User", 10,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Import", "导入"), Action("Export", "导出"), Action("Print", "打印"))
+        });
+
+        // ---- 异动管理 ----
+        await AddSubsystemAsync("Chg", "异动管理", "Switch", 30, new[]
+        {
+            Module("Type", "异动类型管理", "/change/type", "change/type/index", "Document", 10,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除")),
+
+            Module("Apply", "异动申请", "/change/apply", "change/apply/index", "EditPen", 20,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Export", "导出")),
+
+            Module("Audit", "异动审核", "/change/audit", "change/audit/index", "CircleCheck", 30,
+                Action("Query", "查看"), Action("Approve", "审核"), Action("RevokeApprove", "撤销审核"),
+                Action("Export", "导出"))
+        });
+
+        // ---- 照片管理 ----
+        await AddSubsystemAsync("Pho", "照片管理", "Picture", 40, new[]
+        {
+            Module("Photo", "照片管理", "/photo/list", "photo/list/index", "PictureFilled", 10,
+                Action("Query", "查看"), Action("Upload", "上传"), Action("Delete", "删除"), Action("Export", "导出"))
+        });
+
+        var subsystemCount = await _subsystems.GetCountAsync();
+        var moduleCount = await _modules.GetCountAsync();
+        var actionCount = await _actions.GetCountAsync();
+
+        _logger.LogInformation(
+            "[模块元数据] 当前共有 {Subsystems} 个子系统、{Modules} 个模块、{Actions} 个操作。",
+            subsystemCount, moduleCount, actionCount);
+    }
+
+    private async Task AddSubsystemAsync(
+        string code,
+        string name,
+        string? icon,
+        int sort,
+        ModuleSeed[] moduleSeeds)
+    {
+        var subsystem = await _subsystems.FindAsync(s => s.Code == code);
+
+        if (subsystem == null)
+        {
+            subsystem = new SysSubsystem(_guidGenerator.Create(), code, name, icon, sort);
+            await _subsystems.InsertAsync(subsystem, autoSave: true);
+        }
+
+        var existingModules = await _modules.GetListAsync(m => m.SubsystemId == subsystem.Id);
+        var existingByCode = existingModules.ToDictionary(m => m.Code, StringComparer.Ordinal);
+
+        foreach (var moduleSeed in moduleSeeds)
+        {
+            if (existingByCode.TryGetValue(moduleSeed.Code, out var existingModule))
+            {
+                await EnsureActionsAsync(existingModule, code, moduleSeed);
+                continue;
+            }
+
+            var module = new SysModule(
+                _guidGenerator.Create(),
+                subsystem.Id,
+                moduleSeed.Code,
+                moduleSeed.Name,
+                $"{code}.{moduleSeed.Code}",
+                moduleSeed.Path,
+                moduleSeed.Component,
+                moduleSeed.Sort)
+            {
+                Icon = moduleSeed.Icon
+            };
+
+            await _modules.InsertAsync(module, autoSave: true);
+            await EnsureActionsAsync(module, code, moduleSeed);
+        }
+    }
+
+    private async Task EnsureActionsAsync(SysModule module, string subsystemCode, ModuleSeed moduleSeed)
+    {
+        var existing = await _actions.GetListAsync(a => a.ModuleId == module.Id);
+        var existingCodes = existing.Select(a => a.Code).ToHashSet(StringComparer.Ordinal);
+
+        var order = 0;
+        foreach (var actionSeed in moduleSeed.Actions)
+        {
+            order += 10;
+
+            if (existingCodes.Contains(actionSeed.Code))
+            {
+                continue;
+            }
+
+            var action = new SysModuleAction(
+                _guidGenerator.Create(),
+                module.Id,
+                actionSeed.Code,
+                actionSeed.Name,
+                actionSeed.ActionType,
+                $"{subsystemCode}.{moduleSeed.Code}.{actionSeed.Code}",
+                order);
+
+            await _actions.InsertAsync(action, autoSave: true);
+        }
+    }
+
+    // ---- 种子定义辅助 ----
+
+    private static ModuleSeed Module(
+        string code,
+        string name,
+        string? path,
+        string? component,
+        string? icon,
+        int sort,
+        params ActionSeed[] actions)
+    {
+        return new ModuleSeed(code, name, path, component, icon, sort, actions);
+    }
+
+    private static ActionSeed Action(string actionType, string name)
+    {
+        return new ActionSeed(actionType, name);
+    }
+
+    private sealed record ModuleSeed(
+        string Code,
+        string Name,
+        string? Path,
+        string? Component,
+        string? Icon,
+        int Sort,
+        ActionSeed[] Actions);
+
+    private sealed record ActionSeed(string ActionType, string Name)
+    {
+        /// <summary>操作编码与操作类型同名（Query/Create/Update/...）。</summary>
+        public string Code => ActionType;
+    }
+}
