@@ -15,14 +15,14 @@ name: xjgl-dev
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # 用 Debian 版而非 alpine：完整支持 ICU 排序规则（中文/生僻字排序要用）
+    image: postgres:16
     container_name: xjgl-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: xjgl
       POSTGRES_USER: xjgl
       POSTGRES_PASSWORD: Xjgl@Dev2026
-      # 中文排序 + 生僻字：初始化时使用 ICU 排序规则
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
       TZ: Asia/Shanghai
     command:
