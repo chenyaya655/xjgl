@@ -40,6 +40,26 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
     private async Task<(OrgDto Province, OrgDto City, OrgDto County, OrgDto SchoolA, OrgDto SchoolB)>
         BuildOrgTreeAsync()
     {
+        // 区划码只有 6 位、值域有限，而测试库会累积历史数据，
+        // 因此随机编码可能撞号；这里对整棵树做重试，避免测试偶发失败。
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                return await BuildOrgTreeOnceAsync();
+            }
+            catch (BusinessException)
+            {
+                // 编码冲突，换一组重试
+            }
+        }
+
+        throw new InvalidOperationException("多次尝试后仍无法生成唯一的组织编码。");
+    }
+
+    private async Task<(OrgDto Province, OrgDto City, OrgDto County, OrgDto SchoolA, OrgDto SchoolB)>
+        BuildOrgTreeOnceAsync()
+    {
         // 行政区划码 6 位；学校标识码 10 位（前 6 位即所属行政区划码），
         // 长度必须精确，否则学籍辅号规则 {SchoolCode:10} 会失败
         var province = await _orgAppService.CreateAsync(new CreateUpdateOrgDto
@@ -70,8 +90,13 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
         return (province, city, county, schoolA, schoolB);
     }
 
-    /// <summary>生成 6 位行政区划码（41 开头，避免与种子数据冲突）。</summary>
-    private static string NewDivisionCode() => "41" + Random.Shared.Next(1000, 9999).ToString("D4");
+    /// <summary>生成 6 位行政区划码（用 GUID 取熵；撞号由调用方重试）。</summary>
+    private static string NewDivisionCode()
+    {
+        var value = BitConverter.ToUInt16(Guid.NewGuid().ToByteArray(), 0);
+
+        return (100000 + value % 900000).ToString();
+    }
 
     private static string NewIdCard()
     {
