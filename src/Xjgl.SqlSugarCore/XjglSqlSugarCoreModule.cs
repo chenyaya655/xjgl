@@ -19,7 +19,10 @@ public class XjglSqlSugarCoreModule : AbpModule
 
         Configure<XjglSqlSugarCoreOptions>(configuration.GetSection("Xjgl:SqlSugar"));
 
-        // Scoped：同一工作单元内复用同一个 SqlSugar 客户端，事务状态才能连贯
-        context.Services.AddScoped<ISqlSugarClientAccessor, SqlSugarClientAccessor>();
+        // 说明：
+        //   SqlSugarClientFactory  -> Singleton（实现 ISingletonDependency，约定式注册）
+        //   SqlSugarClientAccessor -> Scoped    （实现 IScopedDependency，约定式注册）
+        //   XjglRepository<T>      -> Transient （接口继承 ITransientDependency，约定式注册）
+        // 都由 ABP 的约定式注册完成，这里不需要手写 AddXxx。
     }
 }

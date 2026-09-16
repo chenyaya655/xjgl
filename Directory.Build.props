@@ -17,7 +17,12 @@
 
     <!-- 统一版本号：升级 ABP 只需改这里 -->
     <AbpVersion>10.6.0</AbpVersion>
-    <DotNetExtVersion>10.0.12</DotNetExtVersion>
+    <!--
+      Microsoft.Extensions.* / EF Core 的版本必须与 ABP 依赖的版本保持一致
+      （ABP 10.6.0 依赖 EF Core 10.0.9）。设高了会导致运行时
+      “Could not load file or assembly 'Microsoft.EntityFrameworkCore, Version=x.y.z'”。
+    -->
+    <DotNetExtVersion>10.0.9</DotNetExtVersion>
     <SqlSugarVersion>5.1.4.221</SqlSugarVersion>
   </PropertyGroup>
 

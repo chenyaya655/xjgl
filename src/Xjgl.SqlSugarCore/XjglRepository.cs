@@ -24,24 +24,24 @@ namespace Xjgl.SqlSugarCore;
 public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
     where TEntity : class, IEntity, new()
 {
-    protected ISqlSugarClientProvider ClientProvider { get; }
+    protected ISqlSugarClientAccessor ClientAccessor { get; }
     protected IUnitOfWorkManager UnitOfWorkManager { get; }
     protected IAuditPropertySetter AuditPropertySetter { get; }
     protected ILogger Logger { get; }
 
     public XjglRepository(
-        ISqlSugarClientProvider clientProvider,
+        ISqlSugarClientAccessor clientAccessor,
         IUnitOfWorkManager unitOfWorkManager,
         IAuditPropertySetter auditPropertySetter,
         ILogger<XjglRepository<TEntity>> logger)
     {
-        ClientProvider = clientProvider;
+        ClientAccessor = clientAccessor;
         UnitOfWorkManager = unitOfWorkManager;
         AuditPropertySetter = auditPropertySetter;
         Logger = logger;
     }
 
-    public virtual ISqlSugarClient Client => ClientProvider.GetClient();
+    public virtual ISqlSugarClient Client => ClientAccessor.Client;
 
     public virtual ISugarQueryable<TEntity> Queryable => Client.Queryable<TEntity>();
 

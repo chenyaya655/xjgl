@@ -1,6 +1,5 @@
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SqlSugar;
@@ -10,13 +9,13 @@ using Volo.Abp.Domain.Entities;
 namespace Xjgl.SqlSugarCore;
 
 /// <summary>
-/// <see cref="ISqlSugarClientProvider"/> 的默认实现。
+/// <see cref="ISqlSugarClientFactory"/> 的默认实现。
 ///
 /// 同时承担「实体 ↔ 数据库」的映射约定：
 /// 因为领域层刻意不引用任何 ORM（实体上没有 SqlSugar 特性），
 /// 表名、列名、主键、可空性、列类型等规则全部集中在这里推导。
 /// </summary>
-public class SqlSugarClientProvider : ISqlSugarClientProvider, ISingletonDependency
+public class SqlSugarClientFactory : ISqlSugarClientFactory, ISingletonDependency
 {
     /// <summary>这些列名使用 PostgreSQL 的 text 类型（不限长度）。</summary>
     private static readonly HashSet<string> TextColumnNames = new(StringComparer.Ordinal)
@@ -27,41 +26,24 @@ public class SqlSugarClientProvider : ISqlSugarClientProvider, ISingletonDepende
     /// <summary>这些后缀的列使用 512 长度（路径、URL、编码、名称等）。</summary>
     private static readonly string[] LongColumnSuffixes = { "_path", "_url", "_code", "_name" };
 
-    private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
-    private readonly ILogger<SqlSugarClientProvider> _logger;
+    private readonly ILogger<SqlSugarClientFactory> _logger;
     private readonly XjglSqlSugarCoreOptions _options;
     private readonly object _sync = new();
 
     private string? _connectionString;
 
-    public SqlSugarClientProvider(
-        IServiceProvider serviceProvider,
+    public SqlSugarClientFactory(
         IConfiguration configuration,
         IOptions<XjglSqlSugarCoreOptions> options,
-        ILogger<SqlSugarClientProvider> logger)
+        ILogger<SqlSugarClientFactory> logger)
     {
-        _serviceProvider = serviceProvider;
         _configuration = configuration;
         _logger = logger;
         _options = options.Value;
     }
 
-    public ISqlSugarClient GetClient()
-    {
-        // 从当前作用域解析。SqlSugarClientAccessor 注册为 Scoped，
-        // 因此同一工作单元内多次调用得到同一个实例，事务状态才能连贯。
-        var accessor = _serviceProvider.GetRequiredService<ISqlSugarClientAccessor>();
-        return accessor.Client;
-    }
-
-    public ISqlSugarClient CreateIndependentClient()
-    {
-        return BuildClient();
-    }
-
-    /// <summary>由 <see cref="SqlSugarClientAccessor"/> 首次创建客户端时调用。</summary>
-    internal ISqlSugarClient BuildClient()
+    public ISqlSugarClient Create()
     {
         var client = new SqlSugarClient(new ConnectionConfig
         {

@@ -17,8 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="SqlSugarCore" Version="$(SqlSugarVersion)" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="$(DotNetExtVersion)" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(DotNetExtVersion)" />
+    <!-- Microsoft.Extensions.* 由 Volo.Abp.Core 传递提供，不显式引用以免版本冲突 -->
   </ItemGroup>
 
 </Project>

@@ -116,6 +116,10 @@ public class XjglHttpApiHostModule : AbpModule
         Configure<AbpDistributedCacheOptions>(options =>
         {
             options.KeyPrefix = "Xjgl:";
+
+            // 对应方案文档「熔断降级矩阵」：Redis 不可用时，缓存操作降级为“未命中”，
+            // 由下层数据库兜底，而不是把异常抛给用户。
+            options.HideErrors = true;
         });
     }
 

@@ -15,14 +15,14 @@ public class SqlSugarXjglDbSchemaMigrator : IXjglDbSchemaMigrator, ITransientDep
     /// <summary>EF Core 迁移用 10，业务表建表用 20，保证顺序。</summary>
     public int Order => 20;
 
-    private readonly ISqlSugarClientProvider _clientProvider;
+    private readonly ISqlSugarClientFactory _clientFactory;
     private readonly ILogger<SqlSugarXjglDbSchemaMigrator> _logger;
 
     public SqlSugarXjglDbSchemaMigrator(
-        ISqlSugarClientProvider clientProvider,
+        ISqlSugarClientFactory clientFactory,
         ILogger<SqlSugarXjglDbSchemaMigrator> logger)
     {
-        _clientProvider = clientProvider;
+        _clientFactory = clientFactory;
         _logger = logger;
     }
 
@@ -37,7 +37,7 @@ public class SqlSugarXjglDbSchemaMigrator : IXjglDbSchemaMigrator, ITransientDep
 
         _logger.LogInformation("发现 {Count} 个业务实体，开始 CodeFirst 建表 ...", entityTypes.Length);
 
-        var client = _clientProvider.CreateIndependentClient();
+        var client = _clientFactory.Create();
         try
         {
             // 数据库不存在时自动创建（PostgreSQL；已存在则忽略）
