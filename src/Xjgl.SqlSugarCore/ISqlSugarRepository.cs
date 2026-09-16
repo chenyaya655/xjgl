@@ -17,6 +17,9 @@ public interface ISqlSugarRepository<TEntity> : IXjglRepository<TEntity>
     /// <summary>当前作用域的 SqlSugar 客户端。</summary>
     ISqlSugarClient Client { get; }
 
-    /// <summary>链式查询入口。</summary>
+    /// <summary>链式查询入口（实体实现 ISoftDelete 时自动过滤已删除数据）。</summary>
     ISugarQueryable<TEntity> Queryable { get; }
+
+    /// <summary>不过滤软删除的查询入口（回收站、数据恢复等场景）。</summary>
+    ISugarQueryable<TEntity> QueryableIncludingDeleted { get; }
 }

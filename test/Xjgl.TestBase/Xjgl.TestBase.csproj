@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ABP 集成测试基座：把真实的应用服务 + EF Core + SqlSugar 装配起来，
+    连到真实 PostgreSQL 上跑测试（默认连本地测试库 xjgl_test）。
+
+    刻意**不**引用 Host 项目，因此不会带入 Redis / RabbitMQ / OpenIddict ASP.NET Core，
+    测试启动快且不受中间件状态影响。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Xjgl</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Xjgl.Application\Xjgl.Application.csproj" />
+    <ProjectReference Include="..\..\src\Xjgl.EntityFrameworkCore\Xjgl.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\Xjgl.SqlSugarCore\Xjgl.SqlSugarCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      注意：本工程是**类库**，不要引用 xunit.v3。
+      xunit v3 要求测试工程必须是可执行程序（OutputType=Exe），
+      在类库里引用会报 “xUnit.net v3 test projects must be executable”。
+      测试框架由具体测试工程（Xjgl.Domain.Tests / Xjgl.Application.Tests）引入。
+    -->
+    <PackageReference Include="Volo.Abp.TestBase" Version="$(AbpVersion)" />
+    <PackageReference Include="Volo.Abp.Autofac" Version="$(AbpVersion)" />
+    <PackageReference Include="Volo.Abp.Authorization" Version="$(AbpVersion)" />
+  </ItemGroup>
+
+</Project>

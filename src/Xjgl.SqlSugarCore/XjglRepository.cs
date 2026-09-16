@@ -43,7 +43,59 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
 
     public virtual ISqlSugarClient Client => ClientAccessor.Client;
 
-    public virtual ISugarQueryable<TEntity> Queryable => Client.Queryable<TEntity>();
+    /// <summary>
+    /// 链式查询入口。
+    ///
+    /// ★ 这里自动附加了软删除过滤：实体实现 <see cref="ISoftDelete"/> 时，
+    ///   所有读操作（Get / Find / List / Count / Any）都只看到未删除的数据。
+    ///   漏掉这个过滤就会出现「删除成功但还能查到」的假象 ——
+    ///   集成测试正是靠这一点发现的（见 OrgAppServiceTests / CodeAppServiceTests）。
+    ///
+    /// 需要查已删除数据（如回收站）时，用 <see cref="QueryableIncludingDeleted"/>。
+    /// </summary>
+    public virtual ISugarQueryable<TEntity> Queryable
+    {
+        get
+        {
+            var query = Client.Queryable<TEntity>();
+            var filter = GetSoftDeleteFilter();
+
+            return filter == null ? query : query.Where(filter);
+        }
+    }
+
+    /// <summary>不过滤软删除的查询入口（回收站、数据恢复等场景）。</summary>
+    public virtual ISugarQueryable<TEntity> QueryableIncludingDeleted => Client.Queryable<TEntity>();
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, LambdaExpression?> SoftDeleteFilterCache = new();
+
+    /// <summary>
+    /// 构造 <c>e =&gt; !e.IsDeleted</c> 表达式并按类型缓存。
+    /// 实体未实现 ISoftDelete 时返回 null，不做任何过滤。
+    /// </summary>
+    private static Expression<Func<TEntity, bool>>? GetSoftDeleteFilter()
+    {
+        var cached = SoftDeleteFilterCache.GetOrAdd(typeof(TEntity), static type =>
+        {
+            if (!typeof(ISoftDelete).IsAssignableFrom(type))
+            {
+                return null;
+            }
+
+            var property = type.GetProperty(nameof(ISoftDelete.IsDeleted));
+            if (property == null || property.PropertyType != typeof(bool))
+            {
+                return null;
+            }
+
+            var parameter = Expression.Parameter(type, "e");
+            var body = Expression.Not(Expression.Property(parameter, property));
+
+            return Expression.Lambda(body, parameter);
+        });
+
+        return (Expression<Func<TEntity, bool>>?)cached;
+    }
 
     // ------------------------------------------------------------------
     // 单个查询
