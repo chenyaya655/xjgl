@@ -97,7 +97,7 @@ public class OrgAppService : XjglAppService, IOrgAppService
     // 写入
     // ------------------------------------------------------------------
 
-    [Authorize(XjglPermissions.System.Organization)]
+    [Authorize(MetadataPermissions.Sys.Org.Create)]
     public async Task<OrgDto> CreateAsync(CreateUpdateOrgDto input)
     {
         var code = input.Code.Trim();
@@ -140,7 +140,7 @@ public class OrgAppService : XjglAppService, IOrgAppService
         return ToDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.Organization)]
+    [Authorize(MetadataPermissions.Sys.Org.Update)]
     public async Task<OrgDto> UpdateAsync(Guid id, CreateUpdateOrgDto input)
     {
         var entity = await _orgs.GetAsync(id);
@@ -183,7 +183,7 @@ public class OrgAppService : XjglAppService, IOrgAppService
         return ToDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.Organization)]
+    [Authorize(MetadataPermissions.Sys.Org.Delete)]
     public async Task DeleteAsync(Guid id)
     {
         var entity = await _orgs.GetAsync(id);
@@ -200,7 +200,7 @@ public class OrgAppService : XjglAppService, IOrgAppService
         await _orgs.DeleteAsync(entity, autoSave: true);
     }
 
-    [Authorize(XjglPermissions.System.Organization)]
+    [Authorize(MetadataPermissions.Sys.Org.Update)]
     public async Task MoveAsync(Guid id, MoveOrgDto input)
     {
         var entity = await _orgs.GetAsync(id);

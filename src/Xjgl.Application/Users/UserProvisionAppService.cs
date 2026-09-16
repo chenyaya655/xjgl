@@ -57,7 +57,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     // 管理端
     // ------------------------------------------------------------------
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Query)]
     public async Task<PagedResultDto<PredefineUserDto>> GetListAsync(PredefineUserQueryDto input)
     {
         // 先按组织范围解析出路径前缀；为空表示不限组织
@@ -96,13 +96,13 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return new PagedResultDto<PredefineUserDto>(count, items.Select(ToDto).ToList());
     }
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Query)]
     public async Task<PredefineUserDto> GetAsync(Guid id)
     {
         return ToDto(await _predefines.GetAsync(id));
     }
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Create)]
     public async Task<PredefineUserDto> CreateAsync(CreatePredefineUserDto input)
     {
         var entity = await BuildPredefineAsync(input, batchNo: null, rowIndex: 1);
@@ -111,7 +111,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return ToDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Import)]
     public async Task<ImportPredefineResultDto> ImportAsync(ImportPredefineUsersDto input)
     {
         var batchNo = input.BatchNo.IsNullOrWhiteSpace()
@@ -149,7 +149,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return result;
     }
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Update)]
     public async Task<PredefineUserDto> RenewActivationAsync(Guid id, int validDays = 30)
     {
         var entity = await _predefines.GetAsync(id);
@@ -166,7 +166,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return ToDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Update)]
     public async Task<PredefineUserDto> RevokeAsync(Guid id)
     {
         var entity = await _predefines.GetAsync(id);
@@ -183,7 +183,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return ToDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.User)]
+    [Authorize(MetadataPermissions.Sys.UserProvision.Delete)]
     public async Task DeleteAsync(Guid id)
     {
         var entity = await _predefines.GetAsync(id);

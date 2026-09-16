@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Logging;
+using Volo.Abp.Authorization.Permissions;
 using Volo.Abp.Data;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Guids;
+using Volo.Abp.PermissionManagement;
 using Xjgl.Data;
 
 namespace Xjgl.Metadata;
@@ -22,6 +24,7 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
     private readonly IXjglRepository<SysSubsystem> _subsystems;
     private readonly IXjglRepository<SysModule> _modules;
     private readonly IXjglRepository<SysModuleAction> _actions;
+    private readonly IPermissionDataSeeder _permissionDataSeeder;
     private readonly IGuidGenerator _guidGenerator;
     private readonly ILogger<ModuleMetadataDataSeedContributor> _logger;
 
@@ -29,12 +32,14 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
         IXjglRepository<SysSubsystem> subsystems,
         IXjglRepository<SysModule> modules,
         IXjglRepository<SysModuleAction> actions,
+        IPermissionDataSeeder permissionDataSeeder,
         IGuidGenerator guidGenerator,
         ILogger<ModuleMetadataDataSeedContributor> logger)
     {
         _subsystems = subsystems;
         _modules = modules;
         _actions = actions;
+        _permissionDataSeeder = permissionDataSeeder;
         _guidGenerator = guidGenerator;
         _logger = logger;
     }
@@ -104,6 +109,45 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
         _logger.LogInformation(
             "[模块元数据] 当前共有 {Subsystems} 个子系统、{Modules} 个模块、{Actions} 个操作。",
             subsystemCount, moduleCount, actionCount);
+
+        await GrantAllModulePermissionsToAdminAsync();
+    }
+
+    /// <summary>
+    /// 把全部模块权限授予内置的 admin 角色。
+    ///
+    /// 为什么必须在种子阶段显式做这件事：
+    ///   ABP 的 Identity 种子只会把**应用启动时已定义**的权限授予 admin 角色，
+    ///   而动态权限定义是在启动时从元数据表读出来的 —— 全新数据库首次执行
+    ///   DbMigrator 时表还没建，读到的是空快照，于是 admin 一条业务权限都拿不到。
+    ///   这里在元数据写完之后直接按库里的权限名补授，保证全新安装后 admin 可用。
+    ///
+    /// 幂等：IPermissionDataSeeder 内部对已存在的授权不会重复写。
+    /// </summary>
+    private async Task GrantAllModulePermissionsToAdminAsync()
+    {
+        var modules = await _modules.GetListAsync();
+        var actions = await _actions.GetListAsync();
+
+        var permissionNames = modules.Select(m => m.PermissionName)
+            .Concat(actions.Select(a => a.PermissionName))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (permissionNames.Length == 0)
+        {
+            return;
+        }
+
+        await _permissionDataSeeder.SeedAsync(
+            RolePermissionValueProvider.ProviderName,
+            "admin",
+            permissionNames);
+
+        _logger.LogInformation(
+            "[模块元数据] 已确保 admin 角色拥有全部 {Count} 个模块权限。",
+            permissionNames.Length);
     }
 
     private async Task AddSubsystemAsync(

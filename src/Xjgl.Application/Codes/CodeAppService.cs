@@ -58,7 +58,7 @@ public class CodeAppService : XjglAppService, ICodeAppService
             .ToList();
     }
 
-    [Authorize(XjglPermissions.System.Code)]
+    [Authorize(MetadataPermissions.Sys.Code.Create)]
     public async Task<CodeCategoryDto> CreateCategoryAsync(CreateUpdateCodeCategoryDto input)
     {
         var code = input.Code.Trim();
@@ -87,7 +87,7 @@ public class CodeAppService : XjglAppService, ICodeAppService
         return ToCategoryDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.Code)]
+    [Authorize(MetadataPermissions.Sys.Code.Update)]
     public async Task<CodeCategoryDto> UpdateCategoryAsync(Guid id, CreateUpdateCodeCategoryDto input)
     {
         var entity = await _categories.GetAsync(id);
@@ -128,7 +128,7 @@ public class CodeAppService : XjglAppService, ICodeAppService
         return ToCategoryDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.Code)]
+    [Authorize(MetadataPermissions.Sys.Code.Delete)]
     public async Task DeleteCategoryAsync(Guid id)
     {
         var entity = await _categories.GetAsync(id);
@@ -189,7 +189,7 @@ public class CodeAppService : XjglAppService, ICodeAppService
         return cached ?? new List<CodeItemLookupDto>();
     }
 
-    [Authorize(XjglPermissions.System.Code)]
+    [Authorize(MetadataPermissions.Sys.Code.Create)]
     public async Task<CodeItemDto> CreateItemAsync(CreateUpdateCodeItemDto input)
     {
         var category = await _categories.GetAsync(input.CategoryId);
@@ -221,7 +221,7 @@ public class CodeAppService : XjglAppService, ICodeAppService
         return ToItemDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.Code)]
+    [Authorize(MetadataPermissions.Sys.Code.Update)]
     public async Task<CodeItemDto> UpdateItemAsync(Guid id, CreateUpdateCodeItemDto input)
     {
         var entity = await _items.GetAsync(id);
@@ -256,7 +256,7 @@ public class CodeAppService : XjglAppService, ICodeAppService
         return ToItemDto(entity);
     }
 
-    [Authorize(XjglPermissions.System.Code)]
+    [Authorize(MetadataPermissions.Sys.Code.Delete)]
     public async Task DeleteItemAsync(Guid id)
     {
         var entity = await _items.GetAsync(id);
