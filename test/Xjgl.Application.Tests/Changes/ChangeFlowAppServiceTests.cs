@@ -98,9 +98,18 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
         return (100000 + value % 900000).ToString();
     }
 
+    /// <summary>
+    /// 生成校验位正确的身份证号。
+    ///
+    /// 注意：值域要足够大且要配合重试 —— 测试库会累积历史数据，
+    /// 早先版本用「固定地区 + 固定生日 + 3 位顺序码」只有 900 种可能，
+    /// 跑多轮之后必然撞号，表现为随机的 DuplicateIdCard 让用例失败。
+    /// </summary>
     private static string NewIdCard()
     {
-        var first17 = "410102" + "20150601" + Random.Shared.Next(100, 999).ToString("D3");
+        var birth = $"20{Random.Shared.Next(10, 30):D2}{Random.Shared.Next(1, 13):D2}{Random.Shared.Next(1, 28):D2}";
+        var first17 = "410102" + birth + Random.Shared.Next(0, 1000).ToString("D3");
+
         var weights = new[] { 7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2 };
         const string checkCodes = "10X98765432";
 
@@ -115,18 +124,31 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
 
     private async Task<StudentDto> CreateStudentAsync(Guid schoolId, Guid? gradeId, Guid? classId)
     {
-        return await _studentAppService.CreateAsync(new CreateUpdateStudentDto
+        // 身份证号撞号时换一个重试，避免测试偶发失败
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            Name = "异动测试学生",
-            GenderCode = "1",
-            BirthDate = new DateTime(2015, 6, 1),
-            IdCardTypeCode = "1",
-            IdCardNumber = NewIdCard(),
-            SchoolOrgId = schoolId,
-            AcademicYear = Year,
-            GradeId = gradeId,
-            ClassId = classId
-        });
+            try
+            {
+                return await _studentAppService.CreateAsync(new CreateUpdateStudentDto
+                {
+                    Name = "异动测试学生",
+                    GenderCode = "1",
+                    BirthDate = new DateTime(2015, 6, 1),
+                    IdCardTypeCode = "1",
+                    IdCardNumber = NewIdCard(),
+                    SchoolOrgId = schoolId,
+                    AcademicYear = Year,
+                    GradeId = gradeId,
+                    ClassId = classId
+                });
+            }
+            catch (BusinessException)
+            {
+                // 身份证号已被占用，重新生成
+            }
+        }
+
+        throw new InvalidOperationException("多次尝试后仍无法生成唯一的身份证号。");
     }
 
     /// <summary>建一个「转学」异动类型 + 6 节点流程模板并发布。</summary>

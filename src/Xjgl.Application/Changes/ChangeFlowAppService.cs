@@ -330,8 +330,12 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
 
         var total = tasks.Count;
 
+        // 按创建时间**降序**：新待办排在前面。
+        // 这既符合「待办列表把最新的放前面」的使用习惯，也避免分页时
+        // 最新单据因为排在末尾而被 Take 截掉（测试库里会累积历史待办）。
         var paged = tasks
-            .OrderBy(t => t.CreationTime)
+            .OrderByDescending(t => t.CreationTime)
+            .ThenByDescending(t => t.Seq)
             .Skip(input.SkipCount)
             .Take(input.MaxResultCount)
             .ToList();
