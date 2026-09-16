@@ -2,7 +2,7 @@ using System.Reflection;
 using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
 using Xjgl.Data;
-using Xjgl.SqlSugarCore;
+using Xjgl.Entities;
 
 namespace Xjgl.SqlSugarCore;
 

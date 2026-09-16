@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    单元测试工程（xunit v3 + Microsoft.Testing.Platform）。
+    用 xunit v3 的原因：它把测试工程编译成**普通可执行程序**，测试在进程内运行，
+    不依赖 VSTest 的独立测试宿主（testhost 通过命名管道通信，在受限环境下会被拦截）。
+
+    直接运行： dotnet run 加 project 参数指向本工程
+    或在 VS / VS Code 里直接“运行/调试”本工程。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Xjgl</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Xjgl.Domain.Shared\Xjgl.Domain.Shared.csproj" />
+    <ProjectReference Include="..\..\src\Xjgl.Domain\Xjgl.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.1" />
+    <PackageReference Include="Shouldly" Version="4.3.0" />
+  </ItemGroup>
+
+</Project>
