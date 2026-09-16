@@ -169,7 +169,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
     {
         SetCreationAuditProperties(entity);
 
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
         await Client.Insertable(entity).ExecuteCommandAsync();
 
         if (autoSave)
@@ -196,7 +198,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
             SetCreationAuditProperties(entity);
         }
 
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
         await Client.Insertable(list).ExecuteCommandAsync();
 
         if (autoSave)
@@ -212,7 +216,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
     {
         SetModificationAuditProperties(entity);
 
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
         await Client.Updateable(entity).ExecuteCommandAsync();
 
         if (autoSave)
@@ -239,7 +245,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
             SetModificationAuditProperties(entity);
         }
 
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
         await Client.Updateable(list).ExecuteCommandAsync();
 
         if (autoSave)
@@ -253,7 +261,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
         bool autoSave = false,
         CancellationToken cancellationToken = default)
     {
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
 
         if (entity is ISoftDelete)
         {
@@ -297,7 +307,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
             return;
         }
 
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
 
         if (typeof(ISoftDelete).IsAssignableFrom(typeof(TEntity)))
         {
@@ -328,7 +340,9 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
         Expression<Func<TEntity, bool>> predicate,
         CancellationToken cancellationToken = default)
     {
-        await EnsureTransactionAsync();
+        // 事务改由 ISqlSugarTransactionScope 显式管理，仓储不再隐式开事务
+        // （原因见 ISqlSugarTransactionScope 的类注释：ABP 的 UoW 公开接口无法挂接第三方事务，
+        //   且 OnCompleted 的触发时机晚于 DI 子作用域释放，会造成事务被静默回滚）
         return await Client.Deleteable<TEntity>().Where(predicate).ExecuteCommandAsync();
     }
 
@@ -418,46 +432,17 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
         return builder.ToString();
     }
 
-    /// <summary>
-    /// 若当前 ABP 工作单元要求事务而 SqlSugar 尚未开启事务，则在此开启，
-    /// 并把提交/回滚挂到工作单元的生命周期上。
-    ///
-    /// 说明：SqlSugar 与 EF Core 各自持有事务。业务模块内部（纯 SqlSugar）
-    /// 的原子性由此保证；需要跨两套 ORM 严格原子提交的场景，
-    /// 通过共享 DbTransaction 增强（P1 阶段）。
-    /// </summary>
-    protected virtual async Task EnsureTransactionAsync()
-    {
-        var uow = UnitOfWorkManager.Current;
-        if (uow == null || !uow.Options.IsTransactional)
-        {
-            return;
-        }
-
-        if (Client.Ado.IsAnyTran())
-        {
-            return;
-        }
-
-        await Client.Ado.BeginTranAsync();
-
-        uow.OnCompleted(async () =>
-        {
-            if (Client.Ado.IsAnyTran())
-            {
-                await Client.Ado.CommitTranAsync();
-            }
-        });
-
-        // ABP 的 IUnitOfWork 只提供 OnCompleted 与 Failed 事件（没有 OnFailed/OnDisposed）
-        uow.Failed += (_, _) =>
-        {
-            if (Client.Ado.IsAnyTran())
-            {
-                Client.Ado.RollbackTran();
-            }
-        };
-    }
+    // 历史说明（不要再把事务挂回 UoW 的 OnCompleted 上）：
+    //
+    // 曾经的做法是：当前 ABP 工作单元要求事务时，在仓储里开启 SqlSugar 事务，
+    // 并把提交/回滚挂到 uow.OnCompleted / uow.Failed 上。
+    //
+    // 为什么废弃：ABP 的 DataSeeder 会在 UoW 内部再创建一个 DI 子作用域，
+    // SqlSugar 客户端（Scoped）随子作用域先被释放，而 OnCompleted 要等 UoW 完成才触发
+    // —— 事务在提交前就随连接释放被静默回滚
+    //（日志显示插入 153 条，独立连接查询却是 0 条）。
+    //
+    // 现在改用 ISqlSugarTransactionScope 显式开启事务范围。
 
     /// <summary>
     /// 标记软删除。

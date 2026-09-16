@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Volo.Abp.Data;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Guids;
@@ -23,18 +24,41 @@ public class CodeDataSeedContributor : IDataSeedContributor, ITransientDependenc
     private readonly IXjglRepository<SysCodeCategory> _categories;
     private readonly IXjglRepository<SysCodeItem> _items;
     private readonly IGuidGenerator _guidGenerator;
+    private readonly ILogger<CodeDataSeedContributor> _logger;
 
     public CodeDataSeedContributor(
         IXjglRepository<SysCodeCategory> categories,
         IXjglRepository<SysCodeItem> items,
-        IGuidGenerator guidGenerator)
+        IGuidGenerator guidGenerator,
+        ILogger<CodeDataSeedContributor> logger)
     {
         _categories = categories;
         _items = items;
         _guidGenerator = guidGenerator;
+        _logger = logger;
     }
 
     public async Task SeedAsync(DataSeedContext context)
+    {
+        _logger.LogInformation("[码表种子] 开始写入内置码表 ...");
+
+        try
+        {
+            await SeedInternalAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[码表种子] 写入失败");
+            throw;
+        }
+
+        var categoryCount = await _categories.GetCountAsync();
+        var itemCount = await _items.GetCountAsync();
+        _logger.LogInformation("[码表种子] 完成：码类别 {Categories} 个，码项 {Items} 条",
+            categoryCount, itemCount);
+    }
+
+    private async Task SeedInternalAsync()
     {
         // ---- 基础人员类 ----
         await AddAsync("SEX", "性别码", "GB/T 2261.1", 10, new[]

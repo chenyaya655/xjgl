@@ -83,16 +83,26 @@ public class SqlSugarClientFactory : ISqlSugarClientFactory, ISingletonDependenc
     /// <summary>列映射规则，见方法内注释。</summary>
     private void ConfigureEntityColumn(PropertyInfo property, EntityColumnInfo column)
     {
-        // 1) 只读属性不进数据库。
-        //    典型例子是 ABP 实体基类上的 ExtraProperties（只有 getter），
-        //    它由 ABP 自己序列化，不能让 SqlSugar 当成普通列。
+        // 1) ABP 框架自己托管的属性不进数据库。
+        //    ExtraProperties 的类型是 Volo.Abp.Data.ExtraPropertyDictionary，
+        //    它由 ABP 自身维护；若让 SqlSugar 当普通列读写，会在插入时报
+        //      InvalidCastException: Writing values of 'ExtraPropertyDictionary'
+        //      is not supported for parameters having DataTypeName 'text'
+        //    业务实体请用显式列表达扩展字段，不要依赖 ExtraProperties。
+        if (property.Name == "ExtraProperties")
+        {
+            column.IsIgnore = true;
+            return;
+        }
+
+        // 2) 其它只读属性同样不进数据库
         if (!property.CanWrite)
         {
             column.IsIgnore = true;
             return;
         }
 
-        // 2) 列名同样转 snake_case（属性上显式写了 ColumnName 的除外）
+        // 3) 列名同样转 snake_case（属性上显式写了 ColumnName 的除外）
         var explicitColumn = property.GetCustomAttribute<SugarColumn>();
         var hasExplicitName = explicitColumn is { ColumnName: not null };
 
@@ -101,23 +111,47 @@ public class SqlSugarClientFactory : ISqlSugarClientFactory, ISingletonDependenc
             column.DbColumnName = UtilMethods.ToUnderLine(column.DbColumnName);
         }
 
-        // 3) 主键：ABP 的主键叫 Id 且定义在框架基类里，无法打特性，这里按名字识别
+        // 4) 主键：ABP 的主键叫 Id 且定义在框架基类里，无法打特性，这里按名字识别
         if (property.Name == nameof(IEntity<Guid>.Id))
         {
             column.IsPrimarykey = true;
             column.IsIdentity = false;
         }
 
-        // 4) 可空引用类型统一建为可空列，避免 CodeFirst 误判
-        if (!column.IsPrimarykey && IsNullable(property.PropertyType))
+        // 5) 可空性：引用类型必须按 C# 可空注解判断，
+        //    否则 string 和 string? 会被一律建成可空列（code / name 就吃过这个亏）
+        if (!column.IsPrimarykey)
         {
-            column.IsNullable = true;
+            column.IsNullable = IsPropertyNullable(property);
         }
 
-        // 5) 字符串列的类型与长度约定（领域层不带 ORM 特性，规则集中在这里）
+        // 6) 字符串列的类型与长度约定（领域层不带 ORM 特性，规则集中在这里）
         if (property.PropertyType == typeof(string))
         {
             ApplyStringColumnConvention(column);
+        }
+    }
+
+    private static readonly NullabilityInfoContext NullabilityContext = new();
+
+    /// <summary>按 C# 可空引用类型注解判断属性是否可空。</summary>
+    private static bool IsPropertyNullable(PropertyInfo property)
+    {
+        // 值类型：Nullable<T> 才可空
+        if (property.PropertyType.IsValueType)
+        {
+            return Nullable.GetUnderlyingType(property.PropertyType) != null;
+        }
+
+        // 引用类型：看 ? 注解
+        try
+        {
+            return NullabilityContext.Create(property).WriteState == NullabilityState.Nullable;
+        }
+        catch
+        {
+            // 泛型等场景下取不到注解时，保守地建为可空列
+            return true;
         }
     }
 
@@ -135,10 +169,16 @@ public class SqlSugarClientFactory : ISqlSugarClientFactory, ISingletonDependenc
 
         var name = column.DbColumnName;
 
-        // 以 _json 结尾 → jsonb
+        // 以 _json 结尾 → text（存放 JSON 字符串）
+        //
+        // 注意：这里刻意**不用 jsonb**。C# 属性是 string 时，Npgsql 会把参数按 text 发送，
+        // 而 jsonb 列不接受隐式 text→jsonb 转换，插入时会报
+        //   42804: column "ext_json" is of type jsonb but expression is of type text
+        // 若将来确实需要 jsonb 的索引与运算符，应把实体属性改成强类型对象
+        // （SqlSugar 会按 JSON 序列化并绑定 jsonb），而不是用 string 硬塞。
         if (name.EndsWith("_json", StringComparison.Ordinal))
         {
-            column.DataType = "jsonb";
+            column.DataType = "text";
             return;
         }
 
@@ -185,10 +225,5 @@ public class SqlSugarClientFactory : ISqlSugarClientFactory, ISingletonDependenc
             _connectionString = cs!;
             return _connectionString;
         }
-    }
-
-    private static bool IsNullable(Type type)
-    {
-        return !type.IsValueType || Nullable.GetUnderlyingType(type) != null;
     }
 }

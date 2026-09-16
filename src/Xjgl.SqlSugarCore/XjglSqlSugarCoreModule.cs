@@ -1,7 +1,7 @@
-using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp.Modularity;
+using Xjgl.Data;
 
 namespace Xjgl.SqlSugarCore;
 
@@ -19,10 +19,17 @@ public class XjglSqlSugarCoreModule : AbpModule
 
         Configure<XjglSqlSugarCoreOptions>(configuration.GetSection("Xjgl:SqlSugar"));
 
-        // 说明：
-        //   SqlSugarClientFactory  -> Singleton（实现 ISingletonDependency，约定式注册）
-        //   SqlSugarClientAccessor -> Scoped    （实现 IScopedDependency，约定式注册）
-        //   XjglRepository<T>      -> Transient （接口继承 ITransientDependency，约定式注册）
-        // 都由 ABP 的约定式注册完成，这里不需要手写 AddXxx。
+        // ★ 必须显式注册开放泛型仓储。
+        //   ABP 的约定式注册（ConventionalRegistrar）只会为「封闭类型」按名字匹配接口，
+        //   不会为 XjglRepository<TEntity> 这样的开放泛型自动建立
+        //   IXjglRepository<> / ISqlSugarRepository<> 的映射；
+        //   漏了这一步的表现是运行时才报：
+        //     Cannot resolve parameter 'IXjglRepository`1[Xxx] xxx'
+        context.Services.AddTransient(typeof(IXjglRepository<>), typeof(XjglRepository<>));
+        context.Services.AddTransient(typeof(ISqlSugarRepository<>), typeof(XjglRepository<>));
+
+        // 另外两个由约定式注册完成：
+        //   SqlSugarClientFactory  -> Singleton（ISingletonDependency）
+        //   SqlSugarClientAccessor -> Scoped    （IScopedDependency）
     }
 }
