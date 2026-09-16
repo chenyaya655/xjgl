@@ -11,6 +11,7 @@ public static class XjglDomainErrorCodes
     public const string DataNotFound = "Xjgl:00001";
     public const string DuplicateData = "Xjgl:00002";
     public const string DataInUse = "Xjgl:00003";
+    public const string ValidationFailed = "Xjgl:00004";
 
     // ---- 组织与学校 00100 - 00199 ----
     public const string OrgNotFound = "Xjgl:00100";
