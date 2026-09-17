@@ -129,26 +129,36 @@ corepack pnpm@9.15.0 --filter @xjgl/pc dev     # http://127.0.0.1:5173
 
 ```bash
 # 单元测试：129 个，不依赖数据库（停掉容器也全绿）
-dotnet test test/Xjgl.Domain.Tests
+dotnet run --project test/Xjgl.Domain.Tests
 
 # 集成测试：141 个，打真实 PostgreSQL
-dotnet test test/Xjgl.Application.Tests
+dotnet run --project test/Xjgl.Application.Tests
 
 # 前端类型检查与构建
 corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
 corepack pnpm@9.15.0 --filter @xjgl/pc run build
 ```
 
+> **为什么用 `dotnet run --project` 而不是 `dotnet test`**：测试项目是
+> xunit v3 + Microsoft.Testing.Platform，而 .NET 10 SDK 的 `dotnet test`
+> 默认仍走 VSTest，直接执行会报
+> `Testing with VSTest target is no longer supported by Microsoft.Testing.Platform`。
+> 仓库根的 `global.json` 已经做了运行器 opt-in，但为了不依赖 SDK 的具体行为，
+> **直接运行测试可执行程序是确定可用的方式**（CI 也这么做）。
+> 两种方式都等价：单元测试项目与集成测试项目本身就是可执行程序（`OutputType=Exe`）。
+
 集成测试默认连 `Host=127.0.0.1;Port=5432;Database=xjgl_test`，可用环境变量覆盖：
 
 ```bash
-XJGL_TEST_CONNECTION="Host=...;Database=...;User ID=...;Password=..." dotnet test test/Xjgl.Application.Tests
+XJGL_TEST_CONNECTION="Host=...;Database=...;User ID=...;Password=..." \
+  dotnet run --project test/Xjgl.Application.Tests
 ```
 
 **两处值得注意的测试写法：**
 
 1. **单元测试不需要数据库** —— 领域层不引用任何 ORM，所以"流程实例化与合并算法"
    （14 个用例覆盖跨市/同市/同县/本校/含省级）几毫秒就能跑完。
+   验证方法：把数据库容器停掉再跑一次，仍然全绿。
 2. **照片的故障演练不用真 NAS** —— 把"NAS 主存储"指向本地目录，需要模拟故障时
    把这个目录换成一个**同名文件**，于是"写入失败 → 熔断 → 降级 → 待补偿"真实发生；
    恢复只需把文件删掉。走的是与生产完全相同的依赖注入装配和熔断器，不是 mock。

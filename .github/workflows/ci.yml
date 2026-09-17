@@ -70,10 +70,10 @@ jobs:
         run: dotnet run --project src/Xjgl.DbMigrator -c Release --no-build
 
       - name: 单元测试（不依赖数据库）
-        run: dotnet test test/Xjgl.Domain.Tests -c Release --no-build
+        run: dotnet run --project test/Xjgl.Domain.Tests -c Release --no-build
 
       - name: 集成测试（真实 PostgreSQL）
-        run: dotnet test test/Xjgl.Application.Tests -c Release --no-build
+        run: dotnet run --project test/Xjgl.Application.Tests -c Release --no-build
 
       # 这一条是为了守住一个真实踩过的缺陷：某个接口的参数元数据无法被 SwaggerGen
       # 处理时，**整个 swagger.json 会生成失败（500）**，所有接口的文档一起消失，
