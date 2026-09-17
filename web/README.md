@@ -5,11 +5,25 @@ Vue 3 + TypeScript + Element Plus，pnpm 工作区，一套代码支撑 PC / H5 
 ```
 web/
 ├── apps/
-│   └── pc/            PC 管理端（Vue3 + Element Plus + Vite）
-├── packages/          预留：跨端共享的类型、字典、请求封装
+│   ├── pc/            PC 管理端（Vue3 + Element Plus + Vite，5173）
+│   └── h5/            移动端 H5（教师用：待办审核、拍照上传，5174）
+├── packages/
+│   └── api/           三端共享的 API 层：请求封装、类型、权限码常量（@xjgl/api）
 ├── pnpm-workspace.yaml
 └── package.json       工作区脚本
 ```
+
+### 为什么 API 层要抽成包
+
+`packages/api` 里是 `http.ts`（令牌续期、错误信封解包）、`types.ts`（约 770 行的 DTO）、
+`permissions.ts`（权限码常量）与各业务模块接口。
+
+抽包而不是各端复制的理由很直接：**类型一旦两端各存一份，后端改一个字段就会"改了 A 忘了 B"**，
+而这类不一致的表现是运行期 `undefined` —— 前端只是静默显示空白，不报错、不崩溃，最难排查。
+
+PC 端保留了 `src/api/*.ts` 三个薄壳（`export * from '@xjgl/api'`），
+这样 PC 端十几处 `from '@/api'` 一行都不用改 —— 大规模改导入路径的风险远大于收益。
+H5 是新应用，直接 `from '@xjgl/api'`，不留壳。
 
 ## 快速开始
 
@@ -17,13 +31,19 @@ web/
 # 1) 安装依赖（Node ≥ 20）
 corepack pnpm@9.15.0 install
 
-# 2) 启动开发服务器（默认 http://127.0.0.1:5173）
-corepack pnpm@9.15.0 --filter @xjgl/pc dev
+# 2) 启动开发服务器
+corepack pnpm@9.15.0 --filter @xjgl/pc dev     # PC 端 http://127.0.0.1:5173
+corepack pnpm@9.15.0 --filter @xjgl/h5 dev     # H5 端 http://127.0.0.1:5174
 
-# 3) 生产构建 + 类型检查
-corepack pnpm@9.15.0 --filter @xjgl/pc run build
-corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
+# 3) 生产构建 + 类型检查（`-r` 表示所有工作区项目）
+corepack pnpm@9.15.0 -r typecheck
+corepack pnpm@9.15.0 -r build
 ```
+
+> 在 CI 或脚本里跑安装时注意：`pnpm install` 在检测到 `node_modules` 结构不一致时会**交互式询问**
+> 是否重建，非交互环境下会直接退出且**什么都不装**。加 `CI=true` 让它自动确认；
+> 但 `CI=true` 同时隐含 `--frozen-lockfile`，改动依赖时需要
+> `pnpm install --no-frozen-lockfile`（否则报 `ERR_PNPM_OUTDATED_LOCKFILE`）。
 
 后端默认跑在 `http://localhost:44300`。开发时前端通过 **Vite 代理**把 `/api` 与 `/connect`
 转发过去，所以后端不需要为开发环境放宽 CORS，前端代码里也一律用相对路径 ——
@@ -32,6 +52,40 @@ corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
 
 要指向别的后端，复制 `apps/pc/.env.example` 为 `apps/pc/.env.development.local` 并改
 `VITE_API_BASE_URL`。
+
+## 移动端 H5（apps/h5）
+
+面向**教师**的两个高频场景，只做这两件事：**待办审核**与**拍照上传**。
+
+| 页签 | 内容 |
+|---|---|
+| 待办 | 我的待办（`/api/app/change-flow/todo-list`）、卡片式大按钮、通过/驳回、加载更多、申请详情（流程时间线） |
+| 拍照上传 | 输入学籍辅号 → **人工确认学生姓名** → 调起摄像头拍照 → 上传 → 如实显示结果（含"降级暂存"） |
+| 我的 | 身份、单位、角色、已授权限数、退出登录 |
+
+### 与 PC 端刻意不同的四个决定
+
+1. **不做动态路由，固定三个页签** —— PC 上模块会增删、菜单要跟着变；
+   而移动端只承载两三个高频场景，把它做成"什么都能进"反而让教师在手机上面对一屏看不懂的菜单。
+2. **待办卡片审完即从列表移除** —— 留在列表里会让教师怀疑"是不是没点上"。
+3. **拍照上传一次只处理一个学生，且必须人工确认姓名** —— PC 是"拖 50 个文件按文件名批量匹配"，
+   手机是在学校现场对着一个学生拍；照片装错人是很难发现的错误。
+4. **用 `createWebHashHistory`（hash 路由）** —— H5 常挂在子路径下，
+   history 模式漏配一条 nginx rewrite 的表现就是"能打开首页、一刷新 404"；hash 模式不依赖服务端配置。
+   同时 `base: './'`（相对路径），避免挂在 `/xjgl/h5/` 下时资源 404。
+
+构建目标也调低到 `es2015`：教师手机型号很杂，仍有 Android 7/8 的老机器，
+默认的 `esnext` 会让老 WebView 直接白屏 —— 这类问题在开发机上永远看不到。
+
+### 已知待优化
+
+- **首屏体积偏大**：完整引入 Element Plus 使 `element` 分包约 925KB（gzip 后仍约 260KB）。
+  已按 vue / element / 业务分包（业务代码仅 67KB，改动能被浏览器缓存），
+  但要真正压下去得改成**按需引入**（`unplugin-vue-components`），那会动构建链，留作后续。
+- **组件库选型**：H5 沿用 Element Plus 而不是 Vant。取舍是"一套组件 API、一套经验"对政务小团队更划算，
+  且当前界面复杂度低；若将来 H5 要做成面向家长的高频应用，应换成 Vant。
+- **微信小程序未做**：小程序不能用 Vue3 + Element Plus 直接构建，需要 uni-app/Taro 重写壳，
+  且没有微信开发者工具无法验证，因此单独立项（见方案文档 P5）。
 
 ## 登录与默认账号
 

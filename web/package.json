@@ -6,8 +6,11 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "pnpm --filter @xjgl/pc dev",
+    "dev:h5": "pnpm --filter @xjgl/h5 dev",
     "build": "pnpm --filter @xjgl/pc build",
-    "typecheck": "pnpm --filter @xjgl/pc typecheck",
+    "build:h5": "pnpm --filter @xjgl/h5 build",
+    "build:all": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
     "preview": "pnpm --filter @xjgl/pc preview"
   },
   "engines": {

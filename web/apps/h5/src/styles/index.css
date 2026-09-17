@@ -1,0 +1,70 @@
+/**
+ * 移动端全局样式。
+ *
+ * 移动端与桌面端的差异几乎全在"手指 vs 鼠标"上，因此这里集中处理四件事：
+ *   1) 去掉移动浏览器的点击高亮与双击缩放延迟；
+ *   2) 安全区适配（刘海屏底部）；
+ *   3) 输入框字号 ≥16px，否则 iOS Safari 聚焦时会自动放大页面；
+ *   4) 页面背景与最大宽度（在平板/桌面浏览器里打开时不至于难看）。
+ */
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Source Han Sans SC',
+    'Plangothic P1', 'Plangothic P2', sans-serif;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  background-color: #f5f7fa;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* iOS 会自动放大字号小于 16px 的输入框所在的整个页面 */
+.el-input__inner,
+.el-textarea__inner {
+  font-size: 16px !important;
+}
+
+/* 生僻字字体：与 PC 端同样的分片策略，字体文件不放仓库（见 web/README.md） */
+@font-face {
+  font-family: 'Plangothic P1';
+  src: url('/fonts/PlangothicP1-Regular.woff2') format('woff2');
+  font-display: swap;
+  unicode-range: U+20000-2A6DF, U+2A700-2EBEF, U+30000-323AF;
+}
+
+@font-face {
+  font-family: 'Plangothic P2';
+  src: url('/fonts/PlangothicP2-Regular.woff2') format('woff2');
+  font-display: swap;
+  unicode-range: U+2EBF0-2EE5F, U+2F800-2FA1F, U+30000-3134A;
+}
+
+/* 页面容器：底部给 TabBar 留出位置 + 安全区 */
+.h5-page {
+  min-height: 100%;
+  padding: 12px 12px calc(64px + env(safe-area-inset-bottom) + 12px);
+}
+
+.h5-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.h5-muted {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}

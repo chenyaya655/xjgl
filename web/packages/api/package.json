@@ -1,0 +1,18 @@
+{
+  "name": "@xjgl/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "学籍管理系统前端共用的 API 层（请求封装、类型、各业务模块接口）",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./http": "./src/http.ts"
+  },
+  "dependencies": {
+    "axios": "^1.20.0",
+    "element-plus": "^2.14.5"
+  }
+}

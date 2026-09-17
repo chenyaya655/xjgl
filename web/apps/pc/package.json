@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@xjgl/api": "workspace:*",
     "axios": "^1.20.0",
     "dayjs": "^1.11.23",
     "element-plus": "^2.14.5",
