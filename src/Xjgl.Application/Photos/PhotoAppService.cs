@@ -5,6 +5,7 @@ using Volo.Abp;
 using Volo.Abp.Application.Dtos;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Timing;
+using Xjgl.Codes;
 using Xjgl.Data;
 using Xjgl.Organizations;
 using Xjgl.Permissions;
@@ -33,6 +34,9 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     private readonly IClock _clock;
     private readonly IUserDataScopeProvider _dataScopeProvider;
 
+    /// <summary>码表（把学籍状态码翻译成中文名，名额与导出件上要给人看）。</summary>
+    private readonly ICodeAppService _codes;
+
     public PhotoAppService(
         IXjglRepository<StuPhoto> photos,
         IXjglRepository<StuStudent> students,
@@ -44,7 +48,8 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         LocalFallbackPhotoStorage fallback,
         IPhotoCompensationService compensation,
         IClock clock,
-        IUserDataScopeProvider dataScopeProvider)
+        IUserDataScopeProvider dataScopeProvider,
+        ICodeAppService codes)
     {
         _photos = photos;
         _students = students;
@@ -57,6 +62,7 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         _compensation = compensation;
         _clock = clock;
         _dataScopeProvider = dataScopeProvider;
+        _codes = codes;
     }
 
     // ------------------------------------------------------------------
@@ -141,6 +147,10 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
             ? new Dictionary<Guid, SysClass>()
             : (await _classes.GetListAsync(c => classIds.Contains(c.Id))).ToDictionary(c => c.Id);
 
+        // 学籍状态是码值（01/02…），名单与导出件上必须是中文名 ——
+        // 与其它列表页一致：后端翻译，前端不做码表映射
+        var statusNames = await GetStudentStatusNamesAsync();
+
         var items = students.Select(s => new MissingPhotoStudentDto
         {
             StudentId = s.Id,
@@ -150,10 +160,26 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
             SchoolName = orgs.GetValueOrDefault(s.SchoolOrgId)?.Name,
             GradeName = s.GradeId.HasValue ? grades.GetValueOrDefault(s.GradeId.Value)?.GradeName : null,
             ClassName = s.ClassId.HasValue ? classes.GetValueOrDefault(s.ClassId.Value)?.ClassName : null,
-            Status = s.StudentStatusCode
+            Status = s.StudentStatusCode,
+            StatusName = statusNames.TryGetValue(s.StudentStatusCode, out var name) ? name : s.StudentStatusCode
         }).ToList();
 
         return new PagedResultDto<MissingPhotoStudentDto>(totalCount, items);
+    }
+
+    /// <summary>学籍状态码 → 中文名（取不到码表时返回空字典，名单照样能出）。</summary>
+    private async Task<Dictionary<string, string>> GetStudentStatusNamesAsync()
+    {
+        try
+        {
+            var items = await _codes.GetItemsByCodeAsync("STUDENT_STATUS");
+
+            return items.ToDictionary(i => i.Code, i => i.Name, StringComparer.Ordinal);
+        }
+        catch (Exception)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
     }
 
     // ------------------------------------------------------------------

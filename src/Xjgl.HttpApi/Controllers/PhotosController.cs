@@ -31,11 +31,16 @@ public class PhotosController : XjglController
 
     private readonly IPhotoUploadService _uploadService;
     private readonly IPhotoContentService _contentService;
+    private readonly IPhotoExportService _exportService;
 
-    public PhotosController(IPhotoUploadService uploadService, IPhotoContentService contentService)
+    public PhotosController(
+        IPhotoUploadService uploadService,
+        IPhotoContentService contentService,
+        IPhotoExportService exportService)
     {
         _uploadService = uploadService;
         _contentService = contentService;
+        _exportService = exportService;
     }
 
     /// <summary>
@@ -159,6 +164,28 @@ public class PhotosController : XjglController
     public async Task<IActionResult> ContentAsync(Guid studentId, CancellationToken cancellationToken)
     {
         return await SendPhotoAsync(studentId, thumbnail: false, cancellationToken);
+    }
+
+    /// <summary>
+    /// 按条件打包导出照片（zip）。
+    ///
+    /// 压缩包里除了照片还有两份 CSV：**照片清单**（哪张有、哪张在台账里有但读不到）
+    /// 与**缺照片名单**（可选）。照片的文件名是「学籍辅号_姓名」，方便和花名册对照。
+    ///
+    /// 权限同时要求 <c>Export</c> 与 <c>Query</c>：导出内部复用台账查询，
+    /// 只给 Export 不给 Query 的话会在内部调用处 403 —— 那是个让人摸不着头脑的报错，
+    /// 不如在这里就把要求写清楚。
+    /// </summary>
+    [HttpGet("export")]
+    [Authorize(MetadataPermissions.Pho.Photo.Export)]
+    [Authorize(MetadataPermissions.Pho.Photo.Query)]
+    public async Task<IActionResult> ExportAsync(
+        [FromQuery] PhotoExportQueryDto input,
+        CancellationToken cancellationToken)
+    {
+        var result = await _exportService.ExportAsync(input, cancellationToken);
+
+        return File(result.Content, "application/zip", result.FileName);
     }
 
     private async Task<IActionResult> SendPhotoAsync(

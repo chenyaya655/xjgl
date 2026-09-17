@@ -79,7 +79,11 @@ public class MissingPhotoStudentDto
 
     public string? ClassName { get; set; }
 
+    /// <summary>学籍状态码。</summary>
     public string? Status { get; set; }
+
+    /// <summary>学籍状态的中文名（由后端按码表翻译；码表缺失时退化成码值）。</summary>
+    public string? StatusName { get; set; }
 }
 
 /// <summary>缺照片名单查询条件。</summary>

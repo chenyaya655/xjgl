@@ -44,6 +44,7 @@ import type {
   PermissionResult,
   PhotoCompensationResult,
   PhotoDto,
+  PhotoExportQuery,
   PhotoQuery,
   PhotoStorageHealth,
   PhotoUploadResult,
@@ -972,6 +973,20 @@ export const photoApi = {
   /** 取学生照片的**原图**（查看/核对用）。 */
   async getContent(studentId: string): Promise<Blob> {
     const { data } = await http.get<Blob>(`${ENDPOINTS.photoFile}/${studentId}/content`, {
+      responseType: 'blob'
+    })
+
+    return data
+  },
+
+  /**
+   * 打包导出照片（zip，内含「照片清单.csv」与可选的「缺照片名单.csv」）。
+   *
+   * 导出范围 = **当前台账的筛选条件**：这样"我筛出来的这批"和"导出的这批"永远一致。
+   */
+  async exportPhotos(query: PhotoExportQuery): Promise<Blob> {
+    const { data } = await http.get<Blob>(`${ENDPOINTS.photoFile}/export`, {
+      params: query,
       responseType: 'blob'
     })
 

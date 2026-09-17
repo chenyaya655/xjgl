@@ -223,7 +223,12 @@ export interface MissingPhotoStudent {
   schoolName?: string | null
   gradeName?: string | null
   className?: string | null
+
+  /** 学籍状态码（如 01）。 */
   status?: string | null
+
+  /** 学籍状态中文名（后端翻译，展示用这个）。 */
+  statusName?: string | null
 }
 
 export interface MissingPhotoQuery extends PagedRequest {
@@ -1144,4 +1149,24 @@ export interface StudentRosterQuery {
 
   /** 最大行数（默认 2000，上限 10000）。 */
   maxRows?: number
+}
+
+// ---------------------------------------------------------------------------
+// 照片打包导出
+// ---------------------------------------------------------------------------
+
+export interface PhotoExportQuery {
+  schoolOrgId?: string | null
+  batchId?: string | null
+  status?: string | null
+  keyword?: string | null
+
+  /** 最多导出张数（默认 500，上限 2000）。 */
+  maxCount?: number
+
+  /** 导出缩略图而不是原图（体积小得多）。 */
+  useThumbnail?: boolean
+
+  /** 是否附一份「缺照片名单.csv」（默认附）。 */
+  includeMissingList?: boolean
 }

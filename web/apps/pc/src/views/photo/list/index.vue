@@ -39,6 +39,52 @@ const health = ref<PhotoStorageHealth | null>(null)
 
 const canUpload = computed(() => auth.can(MetadataPermissions.Pho.Photo.Upload))
 const canDelete = computed(() => auth.can(MetadataPermissions.Pho.Photo.Delete))
+const canExport = computed(() => auth.can(MetadataPermissions.Pho.Photo.Export))
+
+// ---------------------------------------------------------------------------
+// 打包导出
+//
+// 导出的是"当前筛选条件下你看到的这批"（沿用台账的筛选条件），
+// 压缩包里除了照片还有一份清单 CSV：哪张有、哪张在台账里有但存储里读不到。
+// 读不到的照片**必须出现在清单里**，否则老师会以为"照片都齐了"。
+// ---------------------------------------------------------------------------
+
+const exportDialogVisible = ref(false)
+const exporting = ref(false)
+const exportOptions = reactive({
+  useThumbnail: false,
+  includeMissingList: true,
+  maxCount: 500
+})
+
+async function exportPhotos(): Promise<void> {
+  exporting.value = true
+
+  try {
+    const blob = await photoApi.exportPhotos({
+      status: ledgerQuery.status,
+      keyword: ledgerQuery.keyword || undefined,
+      useThumbnail: exportOptions.useThumbnail,
+      includeMissingList: exportOptions.includeMissingList,
+      maxCount: exportOptions.maxCount
+    })
+
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+
+    link.href = url
+    link.download = `学生照片_${new Date().toISOString().slice(0, 10)}.zip`
+    link.click()
+    URL.revokeObjectURL(url)
+
+    exportDialogVisible.value = false
+    ElMessage.success('已开始下载')
+  } catch {
+    ElMessage.error('导出失败，请稍后重试')
+  } finally {
+    exporting.value = false
+  }
+}
 const canCompensate = computed(() => auth.can(MetadataPermissions.Pho.Photo.Compensate))
 
 const statusOptions = [
@@ -457,6 +503,11 @@ onMounted(async () => {
 
             <div class="photo-list__spacer" />
 
+            <el-button v-if="canExport" :loading="exporting" @click="exportDialogVisible = true">
+              <AppIcon name="Download" />
+              <span>导出照片</span>
+            </el-button>
+
             <el-button v-if="canUpload" type="primary" @click="openUploadDialog">
               <AppIcon name="UploadFilled" />
               <span>批量上传</span>
@@ -582,7 +633,9 @@ onMounted(async () => {
             <el-table-column prop="schoolName" label="学校" min-width="200" show-overflow-tooltip />
             <el-table-column prop="gradeName" label="年级" width="100" />
             <el-table-column prop="className" label="班级" width="100" />
-            <el-table-column prop="status" label="学籍状态" width="110" />
+            <el-table-column label="学籍状态" width="110">
+              <template #default="{ row }">{{ row.statusName ?? row.status ?? '—' }}</template>
+            </el-table-column>
           </el-table>
 
           <el-pagination
@@ -598,6 +651,38 @@ onMounted(async () => {
         </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <!-- ---------------- 导出对话框 ---------------- -->
+    <el-dialog v-model="exportDialogVisible" title="导出照片" width="560px">
+      <el-alert type="info" :closable="false" class="photo-list__export-tip">
+        导出范围与当前台账筛选一致（关键字：{{ ledgerQuery.keyword || '不限' }}，
+        状态：{{ statusOptions.find((s) => s.value === ledgerQuery.status)?.label ?? '全部' }}）。
+        压缩包内含「照片清单.csv」，读不到的照片会明确标注为「文件缺失」。
+      </el-alert>
+
+      <el-form label-width="130px" class="photo-list__export-form">
+        <el-form-item label="最多导出张数">
+          <el-input-number v-model="exportOptions.maxCount" :min="1" :max="2000" :step="100" />
+        </el-form-item>
+
+        <el-form-item label="图片规格">
+          <el-radio-group v-model="exportOptions.useThumbnail">
+            <el-radio :value="false">原图（用于存档）</el-radio>
+            <el-radio :value="true">缩略图（体积小，便于核对）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="附缺照片名单">
+          <el-switch v-model="exportOptions.includeMissingList" />
+          <span class="photo-list__export-hint">同时给出"还没采集照片"的学生名单，便于催收</span>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="exportDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" @click="exportPhotos">开始导出</el-button>
+      </template>
+    </el-dialog>
 
     <!-- ---------------- 上传对话框 ---------------- -->
     <el-dialog v-model="uploadVisible" title="批量上传学生照片" width="900px" top="6vh">
@@ -800,6 +885,19 @@ onMounted(async () => {
   margin-top: 12px;
 }
 <style scoped>
+.photo-list__export-tip {
+  margin-bottom: 12px;
+}
+
+.photo-list__export-form {
+  margin-top: 8px;
+}
+
+.photo-list__export-hint {
+  margin-left: 10px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
 .photo-ledger__thumb {
   width: 44px;
   height: 58px;
