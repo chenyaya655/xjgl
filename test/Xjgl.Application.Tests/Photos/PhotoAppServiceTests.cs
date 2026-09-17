@@ -638,4 +638,24 @@ public class PhotoAppServiceTests : XjglIntegrationTestBase
 
         byFailed.Items.ShouldNotContain(x => x.Id == uploaded.PhotoId);
     }
+
+    [Fact]
+    public async Task 不带任何过滤条件查询列表_不应报SQL语法错误()
+    {
+        RepairNas();
+
+        // 回归用例：仓储的 GetCountAsync 收到 null 谓词时曾拼出以 WHERE 结尾的
+        // 残缺 SQL（PostgreSQL 报 42601: syntax error at end of input），
+        // 表现是「查询全部」报 500、「带条件查询」一切正常 —— 之前所有测试都带了
+        // 过滤条件，因此这个缺陷一路躲过了 138 个集成测试，最后是靠真实调用接口才暴露。
+        var photos = await _photoAppService.GetListAsync(new PhotoQueryDto { MaxResultCount = 5 });
+        photos.TotalCount.ShouldBeGreaterThanOrEqualTo(0);
+
+        var missing = await _photoAppService.GetMissingPhotoListAsync(
+            new MissingPhotoQueryDto { MaxResultCount = 5 });
+        missing.TotalCount.ShouldBeGreaterThanOrEqualTo(0);
+
+        var students = await _studentAppService.GetListAsync(new StudentQueryDto { MaxResultCount = 5 });
+        students.TotalCount.ShouldBeGreaterThanOrEqualTo(0);
+    }
 }

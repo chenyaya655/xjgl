@@ -238,7 +238,11 @@ public class XjglHttpApiHostModule : AbpModule
             return new ResilientDistributedCache(
                 primary,
                 fallback,
-                serviceProvider.GetRequiredService<ILogger<ResilientDistributedCache>>());
+                serviceProvider.GetRequiredService<ILogger<ResilientDistributedCache>>(),
+                // Redis 一旦失败就短路这么久，避免每次缓存操作都去撞 5 秒连接超时
+                TimeSpan.FromSeconds(serviceProvider
+                    .GetRequiredService<IConfiguration>()
+                    .GetValue("Xjgl:Cache:SkipPrimarySeconds", 30)));
         });
     }
 
@@ -266,8 +270,18 @@ public class XjglHttpApiHostModule : AbpModule
         Configure<AbpVirtualFileSystemOptions>(options =>
         {
             var root = hostingEnvironment.ContentRootPath;
-            options.FileSets.ReplaceEmbeddedByPhysical<XjglDomainSharedModule>(
-                Path.GetFullPath(Path.Combine(root, "..", "Xjgl.Domain.Shared")));
+            var physicalPath = Path.GetFullPath(Path.Combine(root, "..", "Xjgl.Domain.Shared"));
+
+            // 物理目录不存在时**必须跳过**，否则 ABP 解析 IVirtualFileProvider 会抛
+            // DirectoryNotFoundException，直接把整个应用带崩 —— 而这个映射本来就只是
+            // 开发期的便利功能。什么情况下会不存在：直接用 bin 目录里的 exe 启动、
+            // 或者把发布产物拷贝到别处运行（此时 ContentRoot 不是源码目录）。
+            if (!Directory.Exists(physicalPath))
+            {
+                return;
+            }
+
+            options.FileSets.ReplaceEmbeddedByPhysical<XjglDomainSharedModule>(physicalPath);
         });
     }
 

@@ -197,10 +197,14 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
     }
 
     public virtual async Task<long> GetCountAsync(
-        Expression<Func<TEntity, bool>> predicate,
+        Expression<Func<TEntity, bool>>? predicate,
         CancellationToken cancellationToken = default)
     {
-        return await Queryable.Where(predicate).CountAsync();
+        // 谓词为 null 时必须**整个跳过 Where**：SqlSugar 收到 null 谓词会拼出
+        // 「... WHERE」这样的残缺 SQL，数据库报 syntax error at end of input。
+        return predicate == null
+            ? await Queryable.CountAsync()
+            : await Queryable.Where(predicate).CountAsync();
     }
 
     public virtual Task<bool> AnyAsync(

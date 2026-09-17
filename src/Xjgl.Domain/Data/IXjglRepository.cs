@@ -64,8 +64,18 @@ public interface IXjglRepository<TEntity> : ITransientDependency
 
     Task<long> GetCountAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// 条件计数。
+    ///
+    /// <paramref name="predicate"/> 允许为 <c>null</c>，表示「不加过滤条件」——
+    /// 这与无参重载等价。之所以必须显式允许，是因为列表接口的过滤条件是**可选**的：
+    /// 调用方拼不出条件时自然会传 null（编译期有 CS8604 警告，很容易被忽略），
+    /// 而底层 SqlSugar 收到 null 谓词会生成一条以 <c>WHERE</c> 结尾的残缺 SQL，
+    /// 数据库直接报 <c>42601: syntax error at end of input</c>，
+    /// 用户看到的是「查询全部」时报 500、「带条件查询」时正常 —— 极难排查。
+    /// </summary>
     Task<long> GetCountAsync(
-        Expression<Func<TEntity, bool>> predicate,
+        Expression<Func<TEntity, bool>>? predicate,
         CancellationToken cancellationToken = default);
 
     Task<bool> AnyAsync(
