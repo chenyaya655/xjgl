@@ -236,3 +236,284 @@ export interface PhotoCompensationResult {
   aborted: boolean
   message: string
 }
+
+// ---------------------------------------------------------------------------
+// 异动（可配置审批流）
+// ---------------------------------------------------------------------------
+
+/** 组织解析器：节点「审的是哪一级组织」。前端下拉框用这些值。 */
+export const ChangeOrgResolvers = {
+  ApplicantSchool: 'ApplicantSchool',
+  StudentSchool: 'StudentSchool',
+  TargetSchool: 'TargetSchool',
+  SourceSchool: 'SourceSchool',
+  TargetCounty: 'TargetCounty',
+  TargetCity: 'TargetCity',
+  SourceCounty: 'SourceCounty',
+  SourceCity: 'SourceCity',
+  Province: 'Province'
+} as const
+
+/** 解析器的中文名（与后端 ChangeOrgResolvers.GetDisplayName 一致）。 */
+export const ChangeOrgResolverNames: Record<string, string> = {
+  ApplicantSchool: '发起人所在学校',
+  StudentSchool: '学生当前学校',
+  TargetSchool: '转入学校',
+  SourceSchool: '转出学校',
+  TargetCounty: '转入学校所在县区',
+  TargetCity: '转入学校所在地市',
+  SourceCounty: '转出学校所在县区',
+  SourceCity: '转出学校所在地市',
+  Province: '省级教育行政部门'
+}
+
+/** 合并策略：同一组织被多个节点解析到时怎么处理。 */
+export const ChangeMergeStrategies = {
+  MergeToLast: 'MergeToLast',
+  MergeToFirst: 'MergeToFirst',
+  NoMerge: 'NoMerge'
+} as const
+
+export const ChangeMergeStrategyNames: Record<string, string> = {
+  MergeToLast: '合并到最后一个节点（上级终审，推荐）',
+  MergeToFirst: '合并到第一个节点',
+  NoMerge: '不合并（同一组织出现多个待办）'
+}
+
+/** 审核级别。 */
+export const ApproveLevels = {
+  School: 'School',
+  County: 'County',
+  City: 'City',
+  Province: 'Province'
+} as const
+
+export const ApproveLevelNames: Record<string, string> = {
+  School: '校级',
+  County: '县区级',
+  City: '地市级',
+  Province: '省级'
+}
+
+/** 异动类型。 */
+export interface ChangeType {
+  id: string
+  code: string
+  name: string
+  categoryCode?: string | null
+  beforeStatusCode?: string | null
+  afterStatusCode?: string | null
+  /** 最高审核级别，超过这个级别的节点在实例化时会被截断 */
+  maxApproveLevel: string
+  maxApproveLevelName: string
+  needPeerSchoolConfirm: boolean
+  affectGrade: boolean
+  affectClass: boolean
+  allowCrossSchool: boolean
+  applyWindowStart?: string | null
+  applyWindowEnd?: string | null
+  allowCrossAcademicYear: boolean
+  maxApplyTimesPerYear: number
+  gradeScope?: string | null
+  requireAttachment: boolean
+  flowTemplateId?: string | null
+  /** 是否已有发布版本的流程；没有就不允许提交申请 */
+  hasPublishedFlow: boolean
+  sort: number
+  isEnabled: boolean
+  remark?: string | null
+}
+
+export interface CreateUpdateChangeType {
+  code: string
+  name: string
+  categoryCode?: string | null
+  beforeStatusCode?: string | null
+  afterStatusCode?: string | null
+  maxApproveLevel: string
+  needPeerSchoolConfirm: boolean
+  affectGrade: boolean
+  affectClass: boolean
+  allowCrossSchool: boolean
+  applyWindowStart?: string | null
+  applyWindowEnd?: string | null
+  allowCrossAcademicYear: boolean
+  maxApplyTimesPerYear: number
+  gradeScope?: string | null
+  requireAttachment: boolean
+  sort: number
+  isEnabled: boolean
+  remark?: string | null
+}
+
+/** 流程节点（只读，来自服务端）。 */
+export interface ChangeFlowNode {
+  id: string
+  templateId: string
+  seq: number
+  nodeName: string
+  orgResolver: string
+  orgResolverName: string
+  roleCode: string
+  mergeStrategy: string
+  allowReject: boolean
+  allowDelegate: boolean
+  timeoutDays: number
+  isEnabled: boolean
+  remark?: string | null
+}
+
+/** 流程节点（提交用）。 */
+export interface CreateUpdateFlowNode {
+  seq: number
+  nodeName: string
+  orgResolver: string
+  roleCode: string
+  mergeStrategy: string
+  allowReject: boolean
+  allowDelegate: boolean
+  timeoutDays: number
+}
+
+export interface ChangeFlowTemplate {
+  id: string
+  changeTypeId: string
+  name: string
+  version: number
+  status: string
+  statusName: string
+  publishedTime?: string | null
+  remark?: string | null
+  nodes: ChangeFlowNode[]
+}
+
+export interface SaveFlowTemplate {
+  changeTypeId: string
+  name: string
+  remark?: string | null
+  nodes: CreateUpdateFlowNode[]
+}
+
+/** 流程预览结果 —— 「业务人员改完流程能立刻看到实际会走几步」。 */
+export interface PreviewFlowResult {
+  changeTypeId: string
+  changeTypeCode: string
+  changeTypeName: string
+  maxApproveLevel: string
+  maxApproveLevelName: string
+  templateVersion: number
+  /** 模板里配了几个节点 */
+  configuredNodeCount: number
+  /** 按本次输入实例化后实际剩几步 */
+  actualStepCount: number
+  nodes: PreviewFlowNode[]
+  warnings: string[]
+}
+
+export interface PreviewFlowNode {
+  seq: number
+  nodeName: string
+  orgId: string
+  orgName: string
+  orgResolver: string
+  orgResolverName: string
+  roleCode: string
+  approveLevel: string
+  approveLevelName: string
+  /** 这个节点是由哪几个配置节点合并来的（长度 > 1 说明发生了合并） */
+  mergedFromSeqs: number[]
+  mergeNote?: string | null
+}
+
+export interface SubmitChangeApply {
+  changeTypeId: string
+  studentId: string
+  targetSchoolOrgId?: string | null
+  targetGradeId?: string | null
+  targetClassId?: string | null
+  reason: string
+  remark?: string | null
+}
+
+export interface ChangeAuditAction {
+  applyId: string
+  opinion?: string | null
+}
+
+export interface ChangeApplyListItem {
+  id: string
+  applyNo: string
+  changeTypeCode: string
+  changeTypeName: string
+  studentId: string
+  studentName: string
+  studentNo?: string | null
+  applyDate: string
+  status: string
+  statusName: string
+  sourceSchoolName?: string | null
+  targetSchoolName?: string | null
+  currentSeq?: number | null
+  currentNodeName?: string | null
+  currentOrgName?: string | null
+  finalApprovedTime?: string | null
+}
+
+export interface ChangeFlowTask {
+  id: string
+  seq: number
+  nodeName: string
+  orgId: string
+  orgName: string
+  roleCode: string
+  approveLevel: string
+  approveLevelName: string
+  status: string
+  statusName: string
+  mergedFromSeqs: number[]
+  handledByName?: string | null
+  handledTime?: string | null
+  opinion?: string | null
+  dueTime?: string | null
+}
+
+export interface ChangeFlowLog {
+  id: string
+  seq?: number | null
+  action: string
+  actionName?: string | null
+  operatorName?: string | null
+  opinion?: string | null
+  actionTime: string
+}
+
+export interface ChangeApply extends ChangeApplyListItem {
+  changeTypeId: string
+  sourceSchoolOrgId: string
+  sourceGradeId?: string | null
+  sourceClassId?: string | null
+  sourceStatusCode?: string | null
+  targetSchoolOrgId?: string | null
+  targetGradeId?: string | null
+  targetClassId?: string | null
+  targetStatusCode?: string | null
+  reason?: string | null
+  remark?: string | null
+  flowTemplateId: string
+  flowTemplateVersion: number
+  tasks: ChangeFlowTask[]
+  logs: ChangeFlowLog[]
+}
+
+export interface ChangeApplyQuery extends PagedRequest {
+  changeTypeId?: string
+  studentId?: string
+  status?: string
+  schoolOrgId?: string
+  keyword?: string
+}
+
+export interface ChangeTodoQuery extends PagedRequest {
+  orgId?: string
+  roleCode?: string
+}

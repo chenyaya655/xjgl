@@ -394,6 +394,67 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
         updatedStudent.SchoolOrgId.ShouldBe(schoolA.Id);
     }
 
+    /// <summary>
+    /// 回归用例：流程被终止后，剩下的节点不能继续显示为「待处理」。
+    ///
+    /// 这个缺陷是启动后端、用真实 HTTP 走一遍「提交 → 通过 → 驳回」才发现的：
+    /// 申请单已经是「已驳回」，详情里却还挂着两个「待处理」节点，
+    /// 用户会以为还要有人继续审。集成测试当时只断言了申请单状态与学籍，
+    /// 没有看**其余节点**的状态。
+    /// </summary>
+    [Fact]
+    public async Task 驳回后_后续未处理节点应标记为已跳过()
+    {
+        SignIn();
+        var (_, _, _, schoolA, schoolB) = await BuildOrgTreeAsync();
+        var type = await CreateTransferTypeAsync();
+        var student = await CreateStudentAsync(schoolA.Id, null, null);
+
+        var apply = await _flow.SubmitAsync(new SubmitChangeApplyDto
+        {
+            ChangeTypeId = type.Id,
+            StudentId = student.Id,
+            TargetSchoolOrgId = schoolB.Id,
+            Reason = "家庭搬迁"
+        });
+
+        // 同县区转学：转入校 → 转出校 → 县区(合并) → 地市(合并)
+        apply.Tasks.Count.ShouldBeGreaterThan(1);
+
+        var rejected = await _flow.RejectAsync(new ChangeAuditActionDto
+        {
+            ApplyId = apply.Id,
+            Opinion = "材料不全"
+        });
+
+        rejected.Status.ShouldBe(ChangeApplyStatus.Rejected);
+        rejected.Tasks.ShouldContain(t => t.Status == ChangeTaskStatus.Rejected);
+        rejected.Tasks.ShouldNotContain(t => t.Status == ChangeTaskStatus.Pending,
+            "流程已终止，不应再有待处理节点");
+    }
+
+    [Fact]
+    public async Task 撤回后_所有未处理节点应标记为已跳过()
+    {
+        SignIn();
+        var (_, _, _, schoolA, schoolB) = await BuildOrgTreeAsync();
+        var type = await CreateTransferTypeAsync();
+        var student = await CreateStudentAsync(schoolA.Id, null, null);
+
+        var apply = await _flow.SubmitAsync(new SubmitChangeApplyDto
+        {
+            ChangeTypeId = type.Id,
+            StudentId = student.Id,
+            TargetSchoolOrgId = schoolB.Id,
+            Reason = "家庭搬迁"
+        });
+
+        var withdrawn = await _flow.WithdrawAsync(apply.Id);
+
+        withdrawn.Status.ShouldBe(ChangeApplyStatus.Withdrawn);
+        withdrawn.Tasks.ShouldNotContain(t => t.Status == ChangeTaskStatus.Pending);
+    }
+
     // ==================================================================
     // 撤销审核
     // ==================================================================

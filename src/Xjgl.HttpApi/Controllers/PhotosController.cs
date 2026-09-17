@@ -99,10 +99,17 @@ public class PhotosController : XjglController
     /// <summary>
     /// 单张上传（小程序拍照上传、PC 端替换某学生照片）。
     /// </summary>
+    /// <remarks>
+    /// 注意 <c>IFormFile</c> 参数上**不能**加 <c>[FromForm]</c>：
+    /// Swashbuckle 遇到「[FromForm] + IFormFile」会直接抛 SwaggerGeneratorException，
+    /// 后果不是这个接口没有文档，而是**整个 /swagger/v1/swagger.json 生成失败（500）**，
+    /// 所有接口的文档一起消失。IFormFile 本身就会从表单绑定，不需要这个特性。
+    /// （同类问题排查起来很绕：Swagger UI 打不开，但接口调用完全正常。）
+    /// </remarks>
     [HttpPost("upload-one")]
     [RequestSizeLimit(20 * 1024 * 1024)]
     public async Task<PhotoUploadItemResultDto> UploadOneAsync(
-        [FromForm] IFormFile file,
+        IFormFile file,
         [FromForm] Guid studentId,
         [FromForm] Guid? batchId = null)
     {

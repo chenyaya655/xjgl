@@ -280,6 +280,10 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
         apply.CurrentSeq = null;
         await _applies.UpdateAsync(apply, autoSave: true);
 
+        // 撤回同样要终止流程：把还没处理的节点全部置为已跳过，
+        // 否则已撤回的申请单里还挂着一串"待处理"节点（虽然不会再出现在待办里）。
+        await SkipPendingTasksAsync(apply.Id);
+
         await WriteLogAsync(apply.Id, null, null, ChangeFlowActions.Withdraw, "撤回申请");
 
         return await GetApplyAsync(apply.Id);
@@ -431,6 +435,12 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
 
         await _tasks.UpdateAsync(current, autoSave: true);
 
+        // 驳回即终止流程：把后续未处理的节点统一置为「已跳过」。
+        // 不这么做的话，申请单已经是"已驳回"，详情里却还挂着几个"待处理"节点 ——
+        // 用户会以为还要有人继续审，而这些节点永远不会再被处理。
+        // （ChangeTaskStatus.Skipped 就是为这种场景准备的。）
+        await SkipPendingTasksAsync(apply.Id, current.Seq);
+
         apply.Status = ChangeApplyStatus.Rejected;
         apply.CurrentSeq = null;
 
@@ -440,6 +450,37 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
             input.Opinion ?? "审核驳回");
 
         return await GetApplyAsync(apply.Id);
+    }
+
+    /// <summary>
+    /// 把某条申请单上「尚未处理」的节点置为已跳过。
+    ///
+    /// 用于流程被终止的场景（驳回、撤回）：申请单已经结束，
+    /// 剩下的节点不该再以「待处理」的姿态出现在详情页里 ——
+    /// 那会让用户以为还需要有人去审。
+    /// </summary>
+    /// <param name="afterSeq">只处理序号大于它的节点；为 <c>null</c> 表示全部。</param>
+    private async Task SkipPendingTasksAsync(Guid applyId, int? afterSeq = null)
+    {
+        var hasAfter = afterSeq.HasValue;
+        var after = afterSeq ?? 0;
+
+        var pending = await _tasks.GetListAsync(t =>
+            t.ApplyId == applyId
+            && t.Status == ChangeTaskStatus.Pending
+            && (!hasAfter || t.Seq > after));
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var task in pending)
+        {
+            task.Status = ChangeTaskStatus.Skipped;
+        }
+
+        await _tasks.UpdateManyAsync(pending, autoSave: true);
     }
 
     [Authorize(MetadataPermissions.Chg.Audit.RevokeApprove)]

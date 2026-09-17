@@ -14,6 +14,7 @@ import type {
 import AppIcon from '@/components/AppIcon.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import { flattenSchools } from '@/utils/org'
 
 /**
  * 照片管理。
@@ -338,20 +339,6 @@ function openUploadDialog(): void {
 // ---------------------------------------------------------------------------
 // 初始化
 // ---------------------------------------------------------------------------
-
-function flattenSchools(nodes: OrgDto[], result: OrgDto[] = []): OrgDto[] {
-  for (const node of nodes) {
-    if (node.orgType === 'School') {
-      result.push(node)
-    }
-
-    if (node.children?.length) {
-      flattenSchools(node.children, result)
-    }
-  }
-
-  return result
-}
 
 onMounted(async () => {
   try {

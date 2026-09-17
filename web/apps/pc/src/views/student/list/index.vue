@@ -6,6 +6,7 @@ import type { OrgDto, StudentListItem } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import { flattenSchools } from '@/utils/org'
 
 /**
  * 学生列表。
@@ -40,21 +41,6 @@ const statusOptions = [
   { value: 'Graduated', label: '毕业' },
   { value: 'Dropped', label: '退学' }
 ]
-
-/** 把组织树里的学校节点拉平，用于下拉选择。 */
-function flattenSchools(nodes: OrgDto[], result: OrgDto[] = []): OrgDto[] {
-  for (const node of nodes) {
-    if (node.orgType === 'School') {
-      result.push(node)
-    }
-
-    if (node.children?.length) {
-      flattenSchools(node.children, result)
-    }
-  }
-
-  return result
-}
 
 async function loadSchools(): Promise<void> {
   try {
