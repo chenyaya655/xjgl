@@ -680,5 +680,114 @@ export interface CodeItem {
   sort: number
   isEnabled: boolean
   stdCode?: string | null
+  extJson?: string | null
   remark?: string | null
+  children: CodeItem[]
+}
+
+export interface CreateUpdateCodeCategory {
+  code: string
+  name: string
+  stdSource?: string | null
+  isTree: boolean
+  isEnabled: boolean
+  cacheable: boolean
+  sort: number
+  remark?: string | null
+}
+
+export interface CreateUpdateCodeItem {
+  categoryId: string
+  code: string
+  name: string
+  parentId?: string | null
+  stdCode?: string | null
+  sort: number
+  isEnabled: boolean
+  extJson?: string | null
+  remark?: string | null
+}
+
+// ---------------------------------------------------------------------------
+// 元数据（子系统 / 模块 / 操作）
+// ---------------------------------------------------------------------------
+
+export interface ModuleAction {
+  id: string
+  moduleId: string
+  code: string
+  name: string
+  actionType: string
+  /** 权限码：{子系统}.{模块}.{操作} */
+  permissionName: string
+  sort: number
+  isEnabled: boolean
+  isDefaultGranted: boolean
+}
+
+export interface SysModule {
+  id: string
+  subsystemId: string
+  code: string
+  name: string
+  /** 权限码：{子系统}.{模块} */
+  permissionName: string
+  /** 前端路由路径，如 /student/list */
+  path?: string | null
+  /** 前端组件路径，如 student/list/index */
+  component?: string | null
+  icon?: string | null
+  sort: number
+  isEnabled: boolean
+  isHidden: boolean
+  isExternal: boolean
+  /** 允许访问的组织层级，逗号分隔 */
+  orgTypes?: string | null
+  remark?: string | null
+  actions: ModuleAction[]
+}
+
+export interface Subsystem {
+  id: string
+  code: string
+  name: string
+  icon?: string | null
+  sort: number
+  isEnabled: boolean
+  remark?: string | null
+  modules: SysModule[]
+}
+
+export interface CreateUpdateSubsystem {
+  code: string
+  name: string
+  icon?: string | null
+  sort: number
+  isEnabled: boolean
+  remark?: string | null
+}
+
+export interface CreateUpdateModule {
+  subsystemId: string
+  code: string
+  name: string
+  path?: string | null
+  component?: string | null
+  icon?: string | null
+  sort: number
+  isEnabled: boolean
+  isHidden: boolean
+  isExternal: boolean
+  orgTypes?: string | null
+  remark?: string | null
+}
+
+export interface CreateUpdateModuleAction {
+  moduleId: string
+  code: string
+  name: string
+  actionType: string
+  sort: number
+  isEnabled: boolean
+  isDefaultGranted: boolean
 }

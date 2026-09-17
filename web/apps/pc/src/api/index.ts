@@ -12,12 +12,18 @@ import type {
   CodeCategory,
   CodeItem,
   CreateUpdateChangeType,
+  CreateUpdateCodeCategory,
+  CreateUpdateCodeItem,
+  CreateUpdateModule,
+  CreateUpdateModuleAction,
   CreateUpdateOrg,
+  CreateUpdateSubsystem,
   CreateUser,
   IdentityRole,
   IdentityUser,
   MissingPhotoQuery,
   MissingPhotoStudent,
+  ModuleAction,
   MyProfile,
   OrgDto,
   OrgTreeNode,
@@ -33,6 +39,8 @@ import type {
   StudentListItem,
   StudentQuery,
   SubmitChangeApply,
+  Subsystem,
+  SysModule,
   TokenResponse,
   UpdateUser
 } from './types'
@@ -65,8 +73,11 @@ export const ENDPOINTS = {
   /** ABP PermissionManagement 自带授权接口 */
   permissions: '/api/permission-management/permissions',
 
+  code: '/api/app/code',
   codeCategories: '/api/app/code/categories',
   codeItems: '/api/app/code/items',
+
+  module: '/api/app/module',
 
   student: '/api/app/student',
 
@@ -345,10 +356,120 @@ export const codeApi = {
     return data
   },
 
-  async getItems(categoryId: string): Promise<CodeItem[]> {
-    const { data } = await http.get<CodeItem[]>(`${ENDPOINTS.codeItems}/${categoryId}`)
+  async createCategory(input: CreateUpdateCodeCategory): Promise<CodeCategory> {
+    const { data } = await http.post<CodeCategory>(`${ENDPOINTS.code}/category`, input)
 
     return data
+  },
+
+  async updateCategory(id: string, input: CreateUpdateCodeCategory): Promise<CodeCategory> {
+    const { data } = await http.put<CodeCategory>(`${ENDPOINTS.code}/${id}/category`, input)
+
+    return data
+  },
+
+  async removeCategory(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.code}/${id}/category`)
+  },
+
+  async getItems(categoryId: string, onlyEnabled = false, asTree = false): Promise<CodeItem[]> {
+    const { data } = await http.get<CodeItem[]>(`${ENDPOINTS.code}/items/${categoryId}`, {
+      params: { onlyEnabled, asTree }
+    })
+
+    return data
+  },
+
+  async createItem(input: CreateUpdateCodeItem): Promise<CodeItem> {
+    const { data } = await http.post<CodeItem>(`${ENDPOINTS.code}/item`, input)
+
+    return data
+  },
+
+  async updateItem(id: string, input: CreateUpdateCodeItem): Promise<CodeItem> {
+    const { data } = await http.put<CodeItem>(`${ENDPOINTS.code}/${id}/item`, input)
+
+    return data
+  },
+
+  async removeItem(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.code}/${id}/item`)
+  },
+
+  /** 码值变更后清缓存（一般写操作已自动失效，这里给一个手动入口）。 */
+  async refreshCache(): Promise<void> {
+    await http.post(`${ENDPOINTS.code}/refresh-cache`, {})
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 元数据：子系统 / 模块 / 操作
+// ---------------------------------------------------------------------------
+
+export const moduleApi = {
+  /** 完整元数据树（子系统 → 模块 → 操作）。数量不大，一次取回。 */
+  async getTree(onlyEnabled = false): Promise<Subsystem[]> {
+    const { data } = await http.get<Subsystem[]>(`${ENDPOINTS.module}/tree`, {
+      params: { onlyEnabled }
+    })
+
+    return data
+  },
+
+  // ---- 子系统 ----
+  async createSubsystem(input: CreateUpdateSubsystem): Promise<Subsystem> {
+    const { data } = await http.post<Subsystem>(`${ENDPOINTS.module}/subsystem`, input)
+
+    return data
+  },
+
+  async updateSubsystem(id: string, input: CreateUpdateSubsystem): Promise<Subsystem> {
+    const { data } = await http.put<Subsystem>(`${ENDPOINTS.module}/${id}/subsystem`, input)
+
+    return data
+  },
+
+  async removeSubsystem(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.module}/${id}/subsystem`)
+  },
+
+  // ---- 模块 ----
+  async createModule(input: CreateUpdateModule): Promise<SysModule> {
+    const { data } = await http.post<SysModule>(`${ENDPOINTS.module}/module`, input)
+
+    return data
+  },
+
+  async updateModule(id: string, input: CreateUpdateModule): Promise<SysModule> {
+    const { data } = await http.put<SysModule>(`${ENDPOINTS.module}/${id}/module`, input)
+
+    return data
+  },
+
+  async removeModule(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.module}/${id}/module`)
+  },
+
+  // ---- 操作 ----
+  async createAction(input: CreateUpdateModuleAction): Promise<ModuleAction> {
+    const { data } = await http.post<ModuleAction>(`${ENDPOINTS.module}/action`, input)
+
+    return data
+  },
+
+  async updateAction(id: string, input: CreateUpdateModuleAction): Promise<ModuleAction> {
+    const { data } = await http.put<ModuleAction>(`${ENDPOINTS.module}/${id}/action`, input)
+
+    return data
+  },
+
+  async removeAction(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.module}/${id}/action`)
+  },
+
+  /** 手工刷新元数据缓存（写操作已自动失效，这里给一个兜底入口）。 */
+  async refreshCache(): Promise<void> {
+    await http.post(`${ENDPOINTS.module}/refresh-cache`, {})
   }
 }
 
