@@ -29,6 +29,7 @@ using Volo.Abp.VirtualFileSystem;
 using Xjgl.Caching;
 using Xjgl.Data;
 using Xjgl.EntityFrameworkCore;
+using Xjgl.Imaging;
 using Xjgl.Photos;
 using Xjgl.Reporting;
 using Xjgl.SqlSugarCore;
@@ -55,7 +56,9 @@ namespace Xjgl;
     typeof(XjglEntityFrameworkCoreModule),
     typeof(XjglSqlSugarCoreModule),
     // PDF 渲染（学籍卡 / 花名册）：独立项目，只有 Host 需要把它装配进来
-    typeof(XjglReportingModule)
+    typeof(XjglReportingModule),
+    // 图像处理（照片缩略图）：同上
+    typeof(XjglImagingModule)
 )]
 public class XjglHttpApiHostModule : AbpModule
 {

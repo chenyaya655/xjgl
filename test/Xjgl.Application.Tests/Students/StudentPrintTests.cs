@@ -164,8 +164,10 @@ public class StudentPrintTests : XjglIntegrationTestBase
         var cardA = await _print.RenderStudentCardAsync(a.Id);
         var cardB = await _print.RenderStudentCardAsync(b.Id);
 
-        // PDF 里是压缩流，不比内容，但长度必须有差异：完全一致说明姓名/辅号没进版面
-        cardA.Content.Length.ShouldNotBe(cardB.Content.Length);
+        // 断言"整份字节不同"而不是"长度不同"：PDF 是压缩流，
+        // 两份内容不同但长度恰好相同的概率并不低（这组用例就翻过一次车，表现为偶发失败）
+        cardA.Content.SequenceEqual(cardB.Content).ShouldBeFalse(
+            "换了学生，产物必须不同：完全一致说明姓名/辅号没进版面");
         cardA.FileName.ShouldNotBe(cardB.FileName);
     }
 
@@ -278,8 +280,8 @@ public class StudentPrintTests : XjglIntegrationTestBase
 
         AssertValidPdf(masked.Content, 1000);
 
-        // 脱敏后姓名变短（张** 比 张三* 之类），长度应当有差异
-        masked.Content.Length.ShouldNotBe(plain.Content.Length);
+        // 脱敏会改变姓名文本，产物必须跟着变
+        masked.Content.SequenceEqual(plain.Content).ShouldBeFalse("脱敏开关没有影响产物，说明姓名没被真正替换");
     }
 
     [Fact]

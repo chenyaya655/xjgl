@@ -7,6 +7,7 @@ using Volo.Abp.Caching;
 using Volo.Abp.Modularity;
 using Volo.Abp.Security.Claims;
 using Xjgl.EntityFrameworkCore;
+using Xjgl.Imaging;
 using Xjgl.Reporting;
 using Xjgl.SqlSugarCore;
 
@@ -23,7 +24,9 @@ namespace Xjgl;
     typeof(XjglSqlSugarCoreModule),
     // 打印（学籍卡/花名册）的实现由这个模块装配：
     // 与 Host 的装配保持一致，否则集成测试里 IStudentPrintService 解析不出来
-    typeof(XjglReportingModule)
+    typeof(XjglReportingModule),
+    // 图像处理（照片缩略图）：同理，缺了它 IImageProcessor 解析不出来
+    typeof(XjglImagingModule)
 )]
 public class XjglTestBaseModule : AbpModule
 {

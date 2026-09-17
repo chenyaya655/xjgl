@@ -26,6 +26,8 @@
     <SqlSugarVersion>5.1.4.221</SqlSugarVersion>
     <!-- PDF 渲染（学籍卡 / 花名册）。QuestPDF 社区版对年收入 100 万美元以下的组织免费。 -->
     <QuestPdfVersion>2026.9.0</QuestPdfVersion>
+    <!-- 图像处理（照片缩略图）。ImageSharp 是纯托管实现，Windows/Linux 行为一致。 -->
+    <ImageSharpVersion>4.1.2</ImageSharpVersion>
   </PropertyGroup>
 
 </Project>

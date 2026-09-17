@@ -96,3 +96,35 @@ public interface IPhotoCompensationService
         int maxCount = 500,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>读取到的照片内容。</summary>
+public sealed class PhotoContentResult
+{
+    public byte[] Content { get; init; } = Array.Empty<byte>();
+
+    public string ContentType { get; init; } = "image/jpeg";
+
+    /// <summary>内容哈希（控制器用它做 ETag，客户端可据此走 304）。</summary>
+    public string? ETag { get; init; }
+
+    /// <summary>实际返回的是缩略图还是原图（缩略图缺失时会回落成原图）。</summary>
+    public bool IsThumbnail { get; init; }
+}
+
+/// <summary>
+/// 读取学生照片内容（原图 / 缩略图）。
+///
+/// 与打印服务同样是"产出二进制"的能力，因此**不实现 IApplicationService**：
+/// 由 <c>PhotosController</c> 显式设置响应头与缓存，而不是被序列化成 base64。
+///
+/// 数据范围按**学生**判定（照片是学生档案的一部分）：
+/// 学生看不到，他的照片（含缩略图）也不给。
+/// </summary>
+public interface IPhotoContentService
+{
+    /// <summary>读取照片；没有照片时返回 null（控制器据此回 404）。</summary>
+    Task<PhotoContentResult?> GetAsync(
+        Guid studentId,
+        bool thumbnail,
+        CancellationToken cancellationToken = default);
+}

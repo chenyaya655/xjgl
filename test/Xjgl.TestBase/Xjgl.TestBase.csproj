@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\src\Xjgl.EntityFrameworkCore\Xjgl.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\..\src\Xjgl.SqlSugarCore\Xjgl.SqlSugarCore.csproj" />
     <ProjectReference Include="..\..\src\Xjgl.Reporting\Xjgl.Reporting.csproj" />
+    <ProjectReference Include="..\..\src\Xjgl.Imaging\Xjgl.Imaging.csproj" />
   </ItemGroup>
 
   <ItemGroup>

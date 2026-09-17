@@ -6,6 +6,7 @@ using Volo.Abp.Guids;
 using Volo.Abp.Timing;
 using Volo.Abp.Users;
 using Xjgl.Data;
+using Xjgl.Imaging;
 using Xjgl.Photos.Dtos;
 using Xjgl.Students;
 
@@ -34,6 +35,7 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
     private readonly IXjglRepository<StuStudent> _students;
     private readonly IXjglRepository<StuPhoto> _photos;
     private readonly IPhotoStorage _storage;
+    private readonly IImageProcessor _imageProcessor;
     private readonly IGuidGenerator _guidGenerator;
     private readonly ICurrentUser _currentUser;
     private readonly IClock _clock;
@@ -43,6 +45,7 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         IXjglRepository<StuStudent> students,
         IXjglRepository<StuPhoto> photos,
         IPhotoStorage storage,
+        IImageProcessor imageProcessor,
         IGuidGenerator guidGenerator,
         ICurrentUser currentUser,
         IClock clock,
@@ -51,6 +54,7 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         _students = students;
         _photos = photos;
         _storage = storage;
+        _imageProcessor = imageProcessor;
         _guidGenerator = guidGenerator;
         _currentUser = currentUser;
         _clock = clock;
@@ -148,6 +152,18 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
 
         public string? RelativePath { get; init; }
 
+        /// <summary>缩略图的相对路径（规则见 <see cref="PhotoPathRule.BuildThumbnail"/>）。</summary>
+        public string? ThumbnailPath { get; init; }
+
+        /// <summary>原图尺寸；内容不是可解码的图片时为 null（此时不生成缩略图，但上传照常完成）。</summary>
+        public PhotoImageSize? Size { get; set; }
+
+        /// <summary>缩略图是否已成功写入存储。</summary>
+        public bool ThumbnailWritten { get; set; }
+
+        /// <summary>缩略图写入失败的原因（只写日志，不影响上传结果）。</summary>
+        public string? ThumbnailError { get; set; }
+
         /// <summary>内容字节数。写完存储后 <see cref="Content"/> 会被释放，因此单独留一份长度。</summary>
         public long ContentLength { get; init; }
 
@@ -219,6 +235,14 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
             prepared.Student.Id,
             request.FileName);
 
+        // 尺寸探测放在这里（内容还在手上），缩略图的**生成**放到并发写存储阶段：
+        // 解码 + 缩放是 CPU 活，放在校验阶段会让"几百张照片"的批次在写存储之前就卡住。
+        // 探测不出来（改了后缀的文本、损坏文件）也不拒绝上传，只是没有尺寸与缩略图 ——
+        // 内容校验是另一件事，见技术债「上传内容未做真实性校验」。
+        var size = await _imageProcessor.ProbeAsync(content, cancellationToken);
+
+        prepared.Size = size;
+
         // 秒传：同一名学生、内容哈希一致、且上次是正常/降级成功态 → 不重复写存储
         if (prepared.Existing != null
             && prepared.Existing.FileHash == hash
@@ -229,6 +253,9 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
             itemResult.Skipped = true;
             itemResult.PhotoId = prepared.Existing.Id;
             itemResult.RelativePath = prepared.Existing.RelativePath;
+            itemResult.ThumbnailPath = prepared.Existing.ThumbnailPath;
+            itemResult.Width = prepared.Existing.Width;
+            itemResult.Height = prepared.Existing.Height;
             result.Skipped++;
             result.Items.Add(itemResult);
             return prepared;
@@ -243,6 +270,11 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
             Content = content,
             Hash = hash,
             RelativePath = relativePath,
+            ThumbnailPath = PhotoPathRule.BuildThumbnail(prepared.Student.SchoolOrgId, prepared.Student.Id),
+            // 注意：探测结果必须**显式带过来**。writeItem 是另一个对象，
+            // 只给 prepared 赋值的话，落库阶段读到的仍是 null —— 尺寸与缩略图会静默丢失
+            // （这个坑被集成测试逮住：result.Width 一直是 0）
+            Size = size,
             ContentLength = content.Length,
             NeedWrite = true
         };
@@ -273,6 +305,11 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
             {
                 using var stream = new MemoryStream(item.Content!, writable: false);
                 item.Write = await _storage.WriteAsync(item.RelativePath!, stream, cancellationToken);
+
+                if (item.Write.Success)
+                {
+                    await WriteThumbnailAsync(item, cancellationToken);
+                }
             }
             catch (Exception ex)
             {
@@ -287,6 +324,49 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         });
 
         await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// 生成并写入缩略图。
+    ///
+    /// **缩略图是锦上添花，失败绝不能影响上传**：它生成不出来时只记日志，
+    /// 原图照样已经写好了、台账照样登记 —— 列表页大不了继续加载原图。
+    /// 这也是为什么这里吞掉所有异常而不是向上抛。
+    /// </summary>
+    private async Task WriteThumbnailAsync(PreparedItem item, CancellationToken cancellationToken)
+    {
+        if (item.ThumbnailPath == null || item.Content == null)
+        {
+            return;
+        }
+
+        if (item.Size == null)
+        {
+            // 不是可解码的图片（例如只改了后缀的文件）：没有缩略图可生成
+            return;
+        }
+
+        try
+        {
+            var thumbnail = await _imageProcessor.CreateThumbnailAsync(item.Content, cancellationToken: cancellationToken);
+
+            if (thumbnail == null)
+            {
+                return;
+            }
+
+            using var thumbStream = new MemoryStream(thumbnail, writable: false);
+            var write = await _storage.WriteAsync(item.ThumbnailPath, thumbStream, cancellationToken);
+
+            item.ThumbnailWritten = write.Success;
+            item.ThumbnailError = write.Success ? null : write.Error;
+        }
+        catch (Exception ex)
+        {
+            item.ThumbnailError = ex.Message;
+
+            _logger.LogWarning(ex, "生成缩略图失败：{Path}", item.RelativePath);
+        }
     }
 
     private async Task PersistAsync(
@@ -338,6 +418,9 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
 
             item.Result.PhotoId = row.Id;
             item.Result.RelativePath = row.RelativePath;
+            item.Result.ThumbnailPath = row.ThumbnailPath;
+            item.Result.Width = row.Width;
+            item.Result.Height = row.Height;
 
             // 学生主表上的 PhotoPath 是「有没有照片」的唯一判据（缺照片台账靠它分页）
             item.Student!.PhotoPath = row.RelativePath;
@@ -404,6 +487,19 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         row.UploadedByUserId = userId;
         row.UploadedByName = userName;
         row.FileSize = item.ContentLength;
+
+        // 尺寸与缩略图：探测/生成失败时保持原值（0 / null），
+        // 而不是把上一次成功的值抹掉 —— 重新上传一张坏图不该让旧缩略图也消失
+        if (item.Size != null)
+        {
+            row.Width = item.Size.Width;
+            row.Height = item.Size.Height;
+        }
+
+        if (item.ThumbnailWritten)
+        {
+            row.ThumbnailPath = item.ThumbnailPath;
+        }
 
         return row;
     }

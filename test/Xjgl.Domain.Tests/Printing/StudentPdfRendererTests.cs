@@ -109,9 +109,9 @@ public class StudentPdfRendererTests
         var a = renderer.Render(Card("张三"));
         var b = renderer.Render(Card("李四"));
 
-        // 不比较内容（PDF 里有压缩流），但长度必须有差异 ——
-        // 否则说明姓名根本没被画上去
-        a.Length.ShouldNotBe(b.Length, "换了姓名，PDF 长度应当变化：完全一样说明文本没进版面");
+        // 比较"整份字节是否相同"而不是长度：PDF 是压缩流，
+        // 内容不同但长度恰好相同的概率并不低，用长度会变成偶发失败
+        a.SequenceEqual(b).ShouldBeFalse("换了姓名，PDF 字节必须变化：完全一样说明文本没进版面");
     }
 
     [Fact]

@@ -18,21 +18,24 @@ namespace Xjgl.Controllers;
 ///   一次 50 张的批量上传会白白多传几 MB，而且服务端还得先在内存里
 ///   拼出整个 JSON 才能开始处理。手写控制器可以直接边收边处理。
 ///
-/// 权限：统一要求 <c>Pho.Photo.Upload</c>；删除/查询仍走应用服务。
+/// 权限：上传要求 <c>Pho.Photo.Upload</c>；**读取照片要求 <c>Pho.Photo.Query</c>** ——
+/// 类级不能统一挂 Upload，否则"能看照片"就隐含了"能传照片"。
 /// </summary>
 [RemoteService]
 [Route("api/photos")]
-[Authorize(MetadataPermissions.Pho.Photo.Upload)]
+[Authorize]
 public class PhotosController : XjglController
 {
     /// <summary>单次请求最多接收的文件数，与上传实现共用同一个上限。</summary>
     public const int MaxFilesPerRequest = PhotoLimits.MaxBatchSize;
 
     private readonly IPhotoUploadService _uploadService;
+    private readonly IPhotoContentService _contentService;
 
-    public PhotosController(IPhotoUploadService uploadService)
+    public PhotosController(IPhotoUploadService uploadService, IPhotoContentService contentService)
     {
         _uploadService = uploadService;
+        _contentService = contentService;
     }
 
     /// <summary>
@@ -47,6 +50,7 @@ public class PhotosController : XjglController
     /// 因此前端不需要自己猜哪几张没上去。
     /// </summary>
     [HttpPost("upload")]
+    [Authorize(MetadataPermissions.Pho.Photo.Upload)]
     [RequestSizeLimit(200 * 1024 * 1024)]
     public async Task<PhotoUploadResultDto> UploadAsync(
         [FromForm] List<IFormFile> files,
@@ -107,6 +111,7 @@ public class PhotosController : XjglController
     /// （同类问题排查起来很绕：Swagger UI 打不开，但接口调用完全正常。）
     /// </remarks>
     [HttpPost("upload-one")]
+    [Authorize(MetadataPermissions.Pho.Photo.Upload)]
     [RequestSizeLimit(20 * 1024 * 1024)]
     public async Task<PhotoUploadItemResultDto> UploadOneAsync(
         IFormFile file,
@@ -129,5 +134,59 @@ public class PhotosController : XjglController
                 Content = stream
             },
             batchId);
+    }
+
+    /// <summary>
+    /// 取学生照片的**缩略图**（列表页用）。
+    ///
+    /// 为什么要专门一个接口：列表页一屏 20 个学生，如果都去拉原图，
+    /// 一次翻页就是几 MB —— 这正是"照片管理打开很慢"的典型原因。
+    /// 缩略图长边 480px，通常十几 KB。
+    ///
+    /// 缓存：返回 <c>ETag</c>（内容哈希）。同一个学生的照片重新上传后哈希会变，
+    /// 浏览器因此不会拿到旧图；没变则回 304，不重复传输。
+    /// </summary>
+    [HttpGet("{studentId:guid}/thumbnail")]
+    [Authorize(MetadataPermissions.Pho.Photo.Query)]
+    public async Task<IActionResult> ThumbnailAsync(Guid studentId, CancellationToken cancellationToken)
+    {
+        return await SendPhotoAsync(studentId, thumbnail: true, cancellationToken);
+    }
+
+    /// <summary>取学生照片的**原图**（详情/打印/人工核对用）。</summary>
+    [HttpGet("{studentId:guid}/content")]
+    [Authorize(MetadataPermissions.Pho.Photo.Query)]
+    public async Task<IActionResult> ContentAsync(Guid studentId, CancellationToken cancellationToken)
+    {
+        return await SendPhotoAsync(studentId, thumbnail: false, cancellationToken);
+    }
+
+    private async Task<IActionResult> SendPhotoAsync(
+        Guid studentId,
+        bool thumbnail,
+        CancellationToken cancellationToken)
+    {
+        var photo = await _contentService.GetAsync(studentId, thumbnail, cancellationToken);
+
+        if (photo == null)
+        {
+            // 没有照片就是没有：不回 403（那会让人以为"有照片但没权限"）
+            return NotFound();
+        }
+
+        if (!string.IsNullOrWhiteSpace(photo.ETag))
+        {
+            Response.Headers.ETag = $"\"{photo.ETag}\"";
+
+            if (Request.Headers.IfNoneMatch.ToString().Contains(photo.ETag, StringComparison.OrdinalIgnoreCase))
+            {
+                return StatusCode(StatusCodes.Status304NotModified);
+            }
+        }
+
+        // private：照片是个人信息，不允许中间代理缓存
+        Response.Headers.CacheControl = "private,max-age=86400";
+
+        return File(photo.Content, photo.ContentType);
     }
 }

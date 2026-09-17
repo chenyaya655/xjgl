@@ -141,6 +141,18 @@ export const ENDPOINTS = {
   studentPrint: '/api/print',
 
   photo: '/api/app/photo',
+
+  /**
+   * 照片的**二进制**接口（缩略图 / 原图）。
+   *
+   * ⚠ 注意这里**没有 `/app`**：照片管理有两套入口 ——
+   *   - `/api/app/photo` 是约定式应用服务（台账查询、删除等，返回 JSON）；
+   *   - `/api/photos` 是手写控制器（上传、取图片，收发二进制）。
+   * 两者路径不同不是笔误。我第一次写成了 `/api/app/photo/{id}/thumbnail`，
+   * 被 `tools/audit-routes.mjs` 当场拦下（否则运行期是 404，
+   * 而前端的 catch 会把它变成"缩略图全是空的"，很难查）。
+   */
+  photoFile: '/api/photos',
   photoMissingList: '/api/app/photo/missing-photo-list',
   photoStorageHealth: '/api/app/photo/storage-health',
   photoCompensate: '/api/app/photo/compensate',
@@ -937,6 +949,31 @@ export const photoApi = {
    */
   async deleteMany(ids: string[]): Promise<number> {
     const { data } = await http.delete<number>(ENDPOINTS.photoDeleteMany, { data: ids })
+
+    return data
+  },
+
+  /**
+   * 取学生照片的**缩略图**（列表页用）。
+   *
+   * 为什么不用 `<img src="...">` 直接指向接口：接口要求 Bearer 令牌，
+   * 而浏览器发图片请求时不会带上 Authorization 头。
+   * 因此统一用 axios 取回 Blob，再用 `URL.createObjectURL` 交给 `<img>`；
+   * 用完必须 `URL.revokeObjectURL`，否则整页浏览下来会一直占着内存。
+   */
+  async getThumbnail(studentId: string): Promise<Blob> {
+    const { data } = await http.get<Blob>(`${ENDPOINTS.photoFile}/${studentId}/thumbnail`, {
+      responseType: 'blob'
+    })
+
+    return data
+  },
+
+  /** 取学生照片的**原图**（查看/核对用）。 */
+  async getContent(studentId: string): Promise<Blob> {
+    const { data } = await http.get<Blob>(`${ENDPOINTS.photoFile}/${studentId}/content`, {
+      responseType: 'blob'
+    })
 
     return data
   },

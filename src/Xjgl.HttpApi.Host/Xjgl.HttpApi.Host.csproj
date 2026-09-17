@@ -14,6 +14,8 @@
     <ProjectReference Include="..\Xjgl.HttpApi\Xjgl.HttpApi.csproj" />
     <!-- PDF 渲染（学籍卡 / 花名册）：只有 Host 需要装配渲染实现，业务层只依赖 Domain.Shared 里的接口 -->
     <ProjectReference Include="..\Xjgl.Reporting\Xjgl.Reporting.csproj" />
+    <!-- 图像处理（照片缩略图）：同上，业务层只依赖 IImageProcessor 接口 -->
+    <ProjectReference Include="..\Xjgl.Imaging\Xjgl.Imaging.csproj" />
   </ItemGroup>
 
   <ItemGroup>

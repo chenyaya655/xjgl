@@ -129,6 +129,14 @@ public class PhotoUploadItemResultDto
 
     public string? RelativePath { get; set; }
 
+    /// <summary>缩略图相对路径（内容不是可解码图片、或缩略图写入失败时为 null）。</summary>
+    public string? ThumbnailPath { get; set; }
+
+    /// <summary>原图宽高（探测不出来时为 0）。</summary>
+    public int Width { get; set; }
+
+    public int Height { get; set; }
+
     public string? ErrorMessage { get; set; }
 }
 

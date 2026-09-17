@@ -557,6 +557,11 @@ public class PhotoCompensationService : IPhotoCompensationService, ITransientDep
             // 回放成功：删本地副本 + 状态转正常
             await _fallback.DeleteAsync(photo.RelativePath, cancellationToken);
 
+            // 缩略图也要一起回放，否则 NAS 上只有原图、缩略图永远停在本地降级区：
+            // 平时看不出来（读的时候会回落），但降级区一旦被清理，
+            // 列表页就会退化成加载原图。**失败只记日志**，不影响这张照片的补偿结论。
+            await ReplayThumbnailAsync(photo, cancellationToken);
+
             photo.Status = PhotoStatuses.Normal;
             photo.ErrorMessage = null;
             touched.Add(photo);
@@ -577,6 +582,45 @@ public class PhotoCompensationService : IPhotoCompensationService, ITransientDep
             result.Scanned, result.Replayed, result.StillPending, result.Failed, result.Aborted);
 
         return result;
+    }
+
+    /// <summary>
+    /// 把缩略图从本地降级区回放到主存储（补偿的一部分）。
+    ///
+    /// 只处理"降级区里有缩略图"的情况：没有就跳过（老数据或缩略图生成失败过）。
+    /// 任何失败都只记日志 —— 缩略图丢了不影响照片本身可用。
+    /// </summary>
+    private async Task ReplayThumbnailAsync(StuPhoto photo, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(photo.ThumbnailPath))
+        {
+            return;
+        }
+
+        try
+        {
+            await using var stream = await _fallback.OpenReadAsync(photo.ThumbnailPath, cancellationToken);
+
+            if (stream == null)
+            {
+                return;
+            }
+
+            var write = await _primary.WriteAsync(photo.ThumbnailPath, stream, cancellationToken);
+
+            if (write.Success)
+            {
+                await _fallback.DeleteAsync(photo.ThumbnailPath, cancellationToken);
+            }
+            else
+            {
+                _logger.LogWarning("[照片补偿] 缩略图补传失败：{Path}（{Error}）", photo.ThumbnailPath, write.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[照片补偿] 缩略图补传异常：{Path}", photo.ThumbnailPath);
+        }
     }
 
     private async Task<bool> ProbeAsync(CancellationToken cancellationToken)

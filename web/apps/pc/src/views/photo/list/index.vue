@@ -77,9 +77,52 @@ async function loadLedger(): Promise<void> {
 
     ledgerRows.value = result.items
     ledgerTotal.value = result.totalCount
+
+    void loadThumbnails(result.items)
   } finally {
     loading.value = false
   }
+}
+
+// ---------------------------------------------------------------------------
+// 缩略图
+//
+// 为什么要自己取 Blob 而不是给 <img> 一个 URL：
+//   照片接口要求 Bearer 令牌，浏览器发图片请求不会带 Authorization 头。
+//   因此用 axios 取回二进制 → createObjectURL 交给 <el-image>。
+//
+// 释放很重要：不 revoke 的话，翻十几页就会一直占着几十 MB 内存。
+// ---------------------------------------------------------------------------
+
+const thumbUrls = ref<Record<string, string>>({})
+
+function thumbUrl(studentId: string): string | undefined {
+  return thumbUrls.value[studentId]
+}
+
+/** 只拉取状态正常的照片（失败/待处理的没有可看的图）。 */
+async function loadThumbnails(rows: PhotoDto[]): Promise<void> {
+  const wanted = rows.filter((r) => r.status === 'Normal' || r.status === 'FallbackPending')
+
+  // 换页时先释放上一页的对象 URL
+  Object.values(thumbUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  thumbUrls.value = {}
+
+  const next: Record<string, string> = {}
+
+  await Promise.all(
+    wanted.map(async (row) => {
+      try {
+        const blob = await photoApi.getThumbnail(row.studentId)
+
+        next[row.studentId] = URL.createObjectURL(blob)
+      } catch {
+        // 单张取不到不影响整页（例如照片文件已从存储里消失）
+      }
+    })
+  )
+
+  thumbUrls.value = next
 }
 
 async function removePhotos(ids: string[]): Promise<void> {
@@ -429,6 +472,19 @@ onMounted(async () => {
             @selection-change="(rows: PhotoDto[]) => (ledgerSelection = rows)"
           >
             <el-table-column type="selection" width="45" />
+            <el-table-column label="照片" width="76" align="center">
+              <template #default="{ row }">
+                <el-image
+                  v-if="thumbUrl(row.studentId)"
+                  :src="thumbUrl(row.studentId)"
+                  :preview-src-list="[thumbUrl(row.studentId)!]"
+                  fit="cover"
+                  preview-teleported
+                  class="photo-ledger__thumb"
+                />
+                <span v-else class="photo-ledger__no-thumb">—</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="studentNo" label="学籍辅号" width="160" />
             <el-table-column prop="studentName" label="姓名" width="120" />
             <el-table-column prop="relativePath" label="存储路径" min-width="260" show-overflow-tooltip />
@@ -742,5 +798,16 @@ onMounted(async () => {
 
 .photo-list__result {
   margin-top: 12px;
+}
+<style scoped>
+.photo-ledger__thumb {
+  width: 44px;
+  height: 58px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.photo-ledger__no-thumb {
+  color: var(--el-text-color-secondary);
 }
 </style>
