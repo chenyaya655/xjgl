@@ -901,3 +901,171 @@ export interface ImportPredefineResult {
   succeeded: number
   errors: ImportPredefineError[]
 }
+
+// ---------------------------------------------------------------------------
+// 学生档案子表（监护人 / 学习简历 / 奖励 / 处分 / 资助 / 体检）
+//
+// 约定：
+//   - 读取类型里的 `xxxName` 是后端翻译好的中文名（前端不做码表映射）；
+//   - **身份证号只有 maskedIdCard**：明文只在写入方向出现，
+//     且"留空 = 不修改"，所以 Input 类型里的 idCardNumber 是可选的。
+// ---------------------------------------------------------------------------
+
+/** 监护人。 */
+export interface Guardian {
+  id: string
+  studentId: string
+  seq: number
+  name: string
+  relationCode?: string | null
+  relationName?: string | null
+  maskedIdCard?: string | null
+  hasIdCard: boolean
+  phoneNumber?: string | null
+  workUnit?: string | null
+  address?: string | null
+  isPrimary: boolean
+  remark?: string | null
+}
+
+export interface GuardianInput {
+  name: string
+  relationCode?: string | null
+  /** 明文；留空表示不修改（界面只显示掩码，用户没改就不该回传）。 */
+  idCardNumber?: string | null
+  phoneNumber?: string | null
+  workUnit?: string | null
+  address?: string | null
+  isPrimary: boolean
+  remark?: string | null
+}
+
+/** 学习简历。 */
+export interface Resume {
+  id: string
+  studentId: string
+  seq: number
+  startDate?: string | null
+  endDate?: string | null
+  schoolName: string
+  gradeName?: string | null
+  className?: string | null
+  post?: string | null
+  referee?: string | null
+  remark?: string | null
+}
+
+export interface ResumeInput {
+  startDate?: string | null
+  endDate?: string | null
+  schoolName: string
+  gradeName?: string | null
+  className?: string | null
+  post?: string | null
+  referee?: string | null
+  remark?: string | null
+}
+
+/** 奖励。 */
+export interface Reward {
+  id: string
+  studentId: string
+  seq: number
+  rewardDate: string
+  rewardName: string
+  rewardTypeCode?: string | null
+  rewardTypeName?: string | null
+  rewardLevelCode?: string | null
+  rewardLevelName?: string | null
+  awardOrg?: string | null
+  remark?: string | null
+}
+
+export interface RewardInput {
+  rewardDate: string
+  rewardName: string
+  rewardTypeCode?: string | null
+  rewardLevelCode?: string | null
+  awardOrg?: string | null
+  remark?: string | null
+}
+
+/** 处分。 */
+export interface Punishment {
+  id: string
+  studentId: string
+  seq: number
+  punishDate: string
+  punishName: string
+  punishTypeCode?: string | null
+  punishTypeName?: string | null
+  punishOrg?: string | null
+  isRevoked: boolean
+  revokeDate?: string | null
+  revokeReason?: string | null
+  remark?: string | null
+}
+
+export interface PunishmentInput {
+  punishDate: string
+  punishName: string
+  punishTypeCode?: string | null
+  punishOrg?: string | null
+  isRevoked: boolean
+  revokeDate?: string | null
+  revokeReason?: string | null
+  remark?: string | null
+}
+
+/** 资助。 */
+export interface Subsidy {
+  id: string
+  studentId: string
+  seq: number
+  academicYear: string
+  subsidyTypeCode?: string | null
+  subsidyTypeName?: string | null
+  subsidyName: string
+  amount?: number | null
+  subsidyDate?: string | null
+  fundingOrg?: string | null
+  remark?: string | null
+}
+
+export interface SubsidyInput {
+  academicYear: string
+  subsidyTypeCode?: string | null
+  subsidyName: string
+  amount?: number | null
+  subsidyDate?: string | null
+  fundingOrg?: string | null
+  remark?: string | null
+}
+
+/** 体质健康（体检）。一个学年一条。 */
+export interface Physical {
+  id: string
+  studentId: string
+  academicYear: string
+  checkDate?: string | null
+  height?: number | null
+  weight?: number | null
+  leftVision?: number | null
+  rightVision?: number | null
+  healthCode?: string | null
+  healthName?: string | null
+  doctorAdvice?: string | null
+  remark?: string | null
+}
+
+export interface PhysicalInput {
+  academicYear: string
+  checkDate?: string | null
+  height?: number | null
+  weight?: number | null
+  leftVision?: number | null
+  rightVision?: number | null
+  healthCode?: string | null
+  doctorAdvice?: string | null
+  remark?: string | null
+}

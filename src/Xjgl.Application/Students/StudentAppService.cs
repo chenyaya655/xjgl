@@ -1,10 +1,7 @@
-using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.Extensions.Configuration;
 using Volo.Abp;
 using Volo.Abp.Application.Dtos;
-using Volo.Abp.Security.Encryption;
 using Volo.Abp.Settings;
 using Volo.Abp.Timing;
 using Xjgl.Codes;
@@ -33,11 +30,15 @@ public class StudentAppService : XjglAppService, IStudentAppService
     private readonly IXjglRepository<SysClass> _classes;
     private readonly ISequenceService _sequenceService;
     private readonly ICodeAppService _codeAppService;
-    private readonly IStringEncryptionService _stringEncryptionService;
     private readonly ISettingProvider _settingProvider;
-    private readonly IConfiguration _configuration;
     private readonly IClock _clock;
     private readonly IUserDataScopeProvider _dataScopeProvider;
+
+    /// <summary>身份证件的加密 / 摘要 / 脱敏（与监护人子表共用同一套规则）。</summary>
+    private readonly IIdCardProtector _idCards;
+
+    /// <summary>数据范围守卫（与学生子表服务共用）。</summary>
+    private readonly IStudentAccessGuard _guard;
 
     public StudentAppService(
         IXjglRepository<StuStudent> students,
@@ -46,11 +47,11 @@ public class StudentAppService : XjglAppService, IStudentAppService
         IXjglRepository<SysClass> classes,
         ISequenceService sequenceService,
         ICodeAppService codeAppService,
-        IStringEncryptionService stringEncryptionService,
         ISettingProvider settingProvider,
-        IConfiguration configuration,
         IClock clock,
-        IUserDataScopeProvider dataScopeProvider)
+        IUserDataScopeProvider dataScopeProvider,
+        IIdCardProtector idCards,
+        IStudentAccessGuard guard)
     {
         _students = students;
         _orgs = orgs;
@@ -58,11 +59,11 @@ public class StudentAppService : XjglAppService, IStudentAppService
         _classes = classes;
         _sequenceService = sequenceService;
         _codeAppService = codeAppService;
-        _stringEncryptionService = stringEncryptionService;
         _settingProvider = settingProvider;
-        _configuration = configuration;
         _clock = clock;
         _dataScopeProvider = dataScopeProvider;
+        _idCards = idCards;
+        _guard = guard;
     }
 
     // ------------------------------------------------------------------
@@ -114,7 +115,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var student = await _students.GetAsync(id);
 
         // 单条记录：越权要**明确拒绝**而不是返回空 —— 否则调用方会误以为"学生不存在"
-        await EnsureInDataScopeAsync(student);
+        await _guard.EnsureInScopeAsync(student);
 
         var listItem = (await ToListItemsAsync(new List<StuStudent> { student })).Single();
 
@@ -170,10 +171,10 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var school = await EnsureSchoolAsync(input.SchoolOrgId);
 
         // 只能往自己数据范围内的学校建学生
-        await EnsureOrgInDataScopeAsync(school, "该学校不在您的数据范围内，不能为其新增学生");
+        await _guard.EnsureOrgInScopeAsync(school, "该学校不在您的数据范围内，不能为其新增学生");
 
         var idCard = NormalizeIdCard(input.IdCardNumber);
-        var idCardHash = ComputeIdCardHash(idCard);
+        var idCardHash = _idCards.ComputeHash(idCard);
 
         // 写入前查重：同一身份证号在系统内只能有一份有效学籍
         var duplicated = await _students.FindAsync(s => s.IdCardHash == idCardHash);
@@ -213,13 +214,13 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var entity = await _students.GetAsync(id);
 
         // 原学校与目标学校都必须在自己范围内（防止把学生"改"到自己看不到的学校）
-        await EnsureInDataScopeAsync(entity);
+        await _guard.EnsureInScopeAsync(entity);
 
         var school = await EnsureSchoolAsync(input.SchoolOrgId);
-        await EnsureOrgInDataScopeAsync(school, "该学校不在您的数据范围内，不能把学生转到该校");
+        await _guard.EnsureOrgInScopeAsync(school, "该学校不在您的数据范围内，不能把学生转到该校");
 
         var idCard = NormalizeIdCard(input.IdCardNumber);
-        var idCardHash = ComputeIdCardHash(idCard);
+        var idCardHash = _idCards.ComputeHash(idCard);
 
         if (!string.Equals(entity.IdCardHash, idCardHash, StringComparison.Ordinal))
         {
@@ -249,44 +250,16 @@ public class StudentAppService : XjglAppService, IStudentAppService
     {
         var entity = await _students.GetAsync(id);
 
-        await EnsureInDataScopeAsync(entity);
+        await _guard.EnsureInScopeAsync(entity);
 
         // 说明：学生若处于在途异动流程中，P3 完成后要在这里拒绝删除
         await _students.DeleteAsync(entity, autoSave: true);
     }
 
-    // ------------------------------------------------------------------
-    // 数据范围
-    // ------------------------------------------------------------------
-
-    /// <summary>
-    /// 单条学生的数据范围校验。
-    ///
-    /// 越权访问**明确抛异常**而不是返回空：调用方（以及后面的用户）需要知道
-    /// "这条数据存在但你看不到"，而不是被误导成"这条数据不存在"。
-    /// </summary>
-    private async Task EnsureInDataScopeAsync(StuStudent student)
-    {
-        var scope = await _dataScopeProvider.GetAsync();
-
-        if (!scope.AllowsEntityPath(student.SchoolPathCode))
-        {
-            throw new BusinessException(XjglDomainErrorCodes.UserNotInDataScope)
-                .WithData("reason", "该学生不在您的数据范围内");
-        }
-    }
-
-    /// <summary>某个组织是否在数据范围内（新增/改学校时用）。</summary>
-    private async Task EnsureOrgInDataScopeAsync(SysOrg org, string reason)
-    {
-        var scope = await _dataScopeProvider.GetAsync();
-
-        if (!scope.AllowsRequestedOrgPath(org.PathCode))
-        {
-            throw new BusinessException(XjglDomainErrorCodes.UserNotInDataScope)
-                .WithData("reason", reason);
-        }
-    }
+    // 注意：单条学生的数据范围校验已上提到 Xjgl.Students.StudentAccessGuard。
+    // 学生详情下的六张子表是**独立路由**，不会自动继承主档的过滤条件，
+    // 因此这段判断必须放在两个服务都能用到的地方 —— 放在本类的私有方法里，
+    // 子表接口就只能复制一份，迟早会漏掉一处（那就是越权读家长身份信息）。
 
     // ------------------------------------------------------------------
     // 重复学籍检测
@@ -302,7 +275,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
             return result;
         }
 
-        var hash = ComputeIdCardHash(idCard);
+        var hash = _idCards.ComputeHash(idCard);
         var matched = await _students.GetListAsync(s => s.IdCardHash == hash);
 
         if (input.ExcludeId.HasValue)
@@ -345,7 +318,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
     {
         entity.FormerName = input.FormerName?.Trim();
         entity.IdCardTypeCode = input.IdCardTypeCode.Trim();
-        entity.IdCardEncrypted = _stringEncryptionService.Encrypt(idCard);
+        entity.IdCardEncrypted = _idCards.Encrypt(idCard);
         entity.IdCardHash = idCardHash;
 
         entity.NationCode = input.NationCode;
@@ -448,18 +421,6 @@ public class StudentAppService : XjglAppService, IStudentAppService
         }
 
         return normalized;
-    }
-
-    private string ComputeIdCardHash(string normalizedIdCard)
-    {
-        var key = _configuration["Xjgl:Security:IdCardHmacKey"];
-
-        if (key.IsNullOrWhiteSpace())
-        {
-            key = "xjgl-dev-idcard-hmac-key-please-change-in-production";
-        }
-
-        return IdCardValidator.ComputeIdCardHash(normalizedIdCard, Encoding.UTF8.GetBytes(key!));
     }
 
     private async Task<System.Linq.Expressions.Expression<Func<StuStudent, bool>>?> BuildPredicateAsync(
@@ -619,7 +580,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
                 ClassName = s.ClassId.HasValue && classMap.TryGetValue(s.ClassId.Value, out var cn) ? cn : null,
                 StudentStatusCode = s.StudentStatusCode,
                 StudentStatusName = statusNames.TryGetValue(s.StudentStatusCode, out var st) ? st : null,
-                MaskedIdCard = MaskIdCard(s.IdCardEncrypted),
+                MaskedIdCard = _idCards.MaskEncrypted(s.IdCardEncrypted),
                 HasPhoto = !string.IsNullOrWhiteSpace(s.PhotoPath)
             };
 
@@ -653,27 +614,9 @@ public class StudentAppService : XjglAppService, IStudentAppService
         return age < 0 ? 0 : age;
     }
 
-    /// <summary>身份证号脱敏：保留前 6 后 4。</summary>
-    private string? MaskIdCard(string? encrypted)
-    {
-        if (encrypted.IsNullOrWhiteSpace())
-        {
-            return null;
-        }
-
-        try
-        {
-            var plain = _stringEncryptionService.Decrypt(encrypted!);
-
-            return plain.Length >= 10
-                ? $"{plain[..6]}********{plain[^4..]}"
-                : new string('*', plain.Length);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
+    // 身份证脱敏与摘要已移到 Xjgl.Students.IdCardProtector：
+    // 监护人子表同样存身份证号，规则（密文入库 + 摘要查重 + 默认只给掩码）必须完全一致，
+    // 各写一份迟早会出现某个界面把明文吐出去。
 
     private static void CopyListFields(StudentListItemDto source, StudentDto target)
     {

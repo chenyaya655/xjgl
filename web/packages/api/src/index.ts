@@ -22,6 +22,8 @@ import type {
   CreateUpdateOrg,
   CreateUpdateSubsystem,
   CreateUser,
+  Guardian,
+  GuardianInput,
   IdentityRole,
   IdentityUser,
   ImportPredefineResult,
@@ -34,6 +36,8 @@ import type {
   OrgDto,
   OrgTreeNode,
   PagedResult,
+  Physical,
+  PhysicalInput,
   PredefineUser,
   PredefineUserQuery,
   PermissionResult,
@@ -43,10 +47,18 @@ import type {
   PhotoStorageHealth,
   PhotoUploadResult,
   PreviewFlowResult,
+  Punishment,
+  PunishmentInput,
+  Resume,
+  ResumeInput,
+  Reward,
+  RewardInput,
   SaveFlowTemplate,
   StudentListItem,
   StudentQuery,
   SubmitChangeApply,
+  Subsidy,
+  SubsidyInput,
   Subsystem,
   SysModule,
   TokenResponse,
@@ -100,6 +112,16 @@ export const ENDPOINTS = {
 
   student: '/api/app/student',
   studentImport: '/api/app/student-import-export',
+
+  /**
+   * 学生档案子表（监护人 / 简历 / 奖励 / 处分 / 资助 / 体检）。
+   *
+   * ⚠ 路径段顺序是 ABP 约定推出来的**实测结果**，不是猜的：
+   *   查询与新增把动作名放在前面（`/guardians/{studentId}`、`/guardian/{studentId}`），
+   *   而修改与删除把 id 放在前面（`/{id}/guardian`）。
+   *   这类"看着别扭但就是这样"的路由必须回 swagger 核对（见 tools/audit-routes.mjs）。
+   */
+  studentProfile: '/api/app/student-profile',
 
   photo: '/api/app/photo',
   photoMissingList: '/api/app/photo/missing-photo-list',
@@ -625,6 +647,163 @@ export const studentImportApi = {
 // ---------------------------------------------------------------------------
 // 照片
 // ---------------------------------------------------------------------------
+
+/**
+ * 学生档案子表。
+ *
+ * 六张子表的接口形状完全一致（列表 / 新增 / 修改 / 删除），因此**刻意写成平铺的显式方法**而不是
+ * 工厂函数：显式写出来的每个 URL 都能被 `tools/audit-routes.mjs` 逐个核对，
+ * 而用 `${action}` 拼出来的 URL 是核对不了的（脚本只能看到模板变量）。
+ * 这类"少写几十行"换来的代价，是路由写错时没人发现。
+ *
+ * 注意 delete 也带了 `<void>` 泛型：核对脚本按 `http.<verb><T>(...)` 匹配，
+ * 不带泛型的调用会被静默跳过。
+ */
+export const studentProfileApi = {
+  // ---- 监护人 ----
+
+  async getGuardians(studentId: string): Promise<Guardian[]> {
+    const { data } = await http.get<Guardian[]>(`${ENDPOINTS.studentProfile}/guardians/${studentId}`)
+
+    return data
+  },
+
+  async createGuardian(studentId: string, input: GuardianInput): Promise<Guardian> {
+    const { data } = await http.post<Guardian>(`${ENDPOINTS.studentProfile}/guardian/${studentId}`, input)
+
+    return data
+  },
+
+  async updateGuardian(id: string, input: GuardianInput): Promise<Guardian> {
+    const { data } = await http.put<Guardian>(`${ENDPOINTS.studentProfile}/${id}/guardian`, input)
+
+    return data
+  },
+
+  async deleteGuardian(id: string): Promise<void> {
+    await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/guardian`)
+  },
+
+  // ---- 学习简历 ----
+
+  async getResumes(studentId: string): Promise<Resume[]> {
+    const { data } = await http.get<Resume[]>(`${ENDPOINTS.studentProfile}/resumes/${studentId}`)
+
+    return data
+  },
+
+  async createResume(studentId: string, input: ResumeInput): Promise<Resume> {
+    const { data } = await http.post<Resume>(`${ENDPOINTS.studentProfile}/resume/${studentId}`, input)
+
+    return data
+  },
+
+  async updateResume(id: string, input: ResumeInput): Promise<Resume> {
+    const { data } = await http.put<Resume>(`${ENDPOINTS.studentProfile}/${id}/resume`, input)
+
+    return data
+  },
+
+  async deleteResume(id: string): Promise<void> {
+    await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/resume`)
+  },
+
+  // ---- 奖励 ----
+
+  async getRewards(studentId: string): Promise<Reward[]> {
+    const { data } = await http.get<Reward[]>(`${ENDPOINTS.studentProfile}/rewards/${studentId}`)
+
+    return data
+  },
+
+  async createReward(studentId: string, input: RewardInput): Promise<Reward> {
+    const { data } = await http.post<Reward>(`${ENDPOINTS.studentProfile}/reward/${studentId}`, input)
+
+    return data
+  },
+
+  async updateReward(id: string, input: RewardInput): Promise<Reward> {
+    const { data } = await http.put<Reward>(`${ENDPOINTS.studentProfile}/${id}/reward`, input)
+
+    return data
+  },
+
+  async deleteReward(id: string): Promise<void> {
+    await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/reward`)
+  },
+
+  // ---- 处分 ----
+
+  async getPunishments(studentId: string): Promise<Punishment[]> {
+    const { data } = await http.get<Punishment[]>(`${ENDPOINTS.studentProfile}/punishments/${studentId}`)
+
+    return data
+  },
+
+  async createPunishment(studentId: string, input: PunishmentInput): Promise<Punishment> {
+    const { data } = await http.post<Punishment>(`${ENDPOINTS.studentProfile}/punishment/${studentId}`, input)
+
+    return data
+  },
+
+  async updatePunishment(id: string, input: PunishmentInput): Promise<Punishment> {
+    const { data } = await http.put<Punishment>(`${ENDPOINTS.studentProfile}/${id}/punishment`, input)
+
+    return data
+  },
+
+  async deletePunishment(id: string): Promise<void> {
+    await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/punishment`)
+  },
+
+  // ---- 资助 ----
+
+  async getSubsidies(studentId: string): Promise<Subsidy[]> {
+    const { data } = await http.get<Subsidy[]>(`${ENDPOINTS.studentProfile}/subsidies/${studentId}`)
+
+    return data
+  },
+
+  async createSubsidy(studentId: string, input: SubsidyInput): Promise<Subsidy> {
+    const { data } = await http.post<Subsidy>(`${ENDPOINTS.studentProfile}/subsidy/${studentId}`, input)
+
+    return data
+  },
+
+  async updateSubsidy(id: string, input: SubsidyInput): Promise<Subsidy> {
+    const { data } = await http.put<Subsidy>(`${ENDPOINTS.studentProfile}/${id}/subsidy`, input)
+
+    return data
+  },
+
+  async deleteSubsidy(id: string): Promise<void> {
+    await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/subsidy`)
+  },
+
+  // ---- 体质健康（体检）----
+
+  async getPhysicals(studentId: string): Promise<Physical[]> {
+    const { data } = await http.get<Physical[]>(`${ENDPOINTS.studentProfile}/physicals/${studentId}`)
+
+    return data
+  },
+
+  async createPhysical(studentId: string, input: PhysicalInput): Promise<Physical> {
+    const { data } = await http.post<Physical>(`${ENDPOINTS.studentProfile}/physical/${studentId}`, input)
+
+    return data
+  },
+
+  async updatePhysical(id: string, input: PhysicalInput): Promise<Physical> {
+    const { data } = await http.put<Physical>(`${ENDPOINTS.studentProfile}/${id}/physical`, input)
+
+    return data
+  },
+
+  async deletePhysical(id: string): Promise<void> {
+    await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/physical`)
+  }
+}
 
 export const photoApi = {
   async getList(query: PhotoQuery): Promise<PagedResult<PhotoDto>> {
