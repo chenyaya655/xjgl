@@ -131,7 +131,7 @@ corepack pnpm@9.15.0 --filter @xjgl/pc dev     # http://127.0.0.1:5173
 # 单元测试：156 个，不依赖数据库（停掉容器也全绿）
 dotnet run --project test/Xjgl.Domain.Tests
 
-# 集成测试：160 个，打真实 PostgreSQL
+# 集成测试：176 个，打真实 PostgreSQL
 dotnet run --project test/Xjgl.Application.Tests
 
 # 前端类型检查与构建
@@ -238,8 +238,9 @@ docs/                          设计与交付文档（学习文档单独交付�
    实现位置：`src/Xjgl.Domain/Organizations/UserDataScope.cs` 与 `UserDataScopeProvider.cs`。
 8. **删除学生不会级联删除子表行**：监护人/简历/奖励/处分/资助/体检这六张表的数据会留下来，
    只是通过学生查不到（成为孤儿行）。清理脚本或直接统计子表时要注意这一点。
-9. **学生子表目前只有端到端探针覆盖**（`tools/probe-subtable.ps1`，26 条断言，
-   需要启动真实主机才能跑），集成测试待补 —— 也就是说 CI 暂时守不住子表的回归。
+9. **学生子表的前端页面尚未实现**：后端 24 个接口与 `@xjgl/api` 的客户端已完成并有
+   16 个集成测试守着（含越权读写必须被拒），但 PC 端的"学生详情（5 个标签页）"还没做，
+   目前只能通过接口访问。
 
 ---
 
