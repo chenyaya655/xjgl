@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Volo.Abp;
 using Volo.Abp.AspNetCore.Mvc;
 using Xjgl.Permissions;
+using Xjgl.RateLimiting;
 using Xjgl.Students;
 
 namespace Xjgl.Controllers;
@@ -26,19 +27,32 @@ namespace Xjgl.Controllers;
 public class StudentPrintController : XjglController
 {
     private readonly IStudentPrintService _printService;
+    private readonly ITokenBucketRateLimiter _rateLimiter;
 
-    public StudentPrintController(IStudentPrintService printService)
+    public StudentPrintController(IStudentPrintService printService, ITokenBucketRateLimiter rateLimiter)
     {
         _printService = printService;
+        _rateLimiter = rateLimiter;
     }
 
     /// <summary>打印一名学生的学籍卡（A4 纵向，一人一页）。</summary>
     [HttpGet("student-card/{studentId}")]
     public async Task<IActionResult> StudentCardAsync(Guid studentId, CancellationToken cancellationToken)
     {
+        // PDF 渲染是 CPU 活：批量打学籍卡时用限流挡住"一次点一百下"
+        var limited = await EnforceRateLimitAsync(
+            _rateLimiter,
+            RateLimitPolicies.Print,
+            "print",
+            cancellationToken: cancellationToken);
+
+        if (limited != null)
+        {
+            return limited;
+        }
+
         var file = await _printService.RenderStudentCardAsync(studentId, cancellationToken);
 
-        // inline 而不是 attachment：打印场景下多数人希望先在浏览器里预览再打印
         return File(file.Content, file.ContentType, file.FileName);
     }
 
@@ -48,6 +62,17 @@ public class StudentPrintController : XjglController
         [FromQuery] StudentRosterQueryDto input,
         CancellationToken cancellationToken)
     {
+        var limited = await EnforceRateLimitAsync(
+            _rateLimiter,
+            RateLimitPolicies.Print,
+            "print",
+            cancellationToken: cancellationToken);
+
+        if (limited != null)
+        {
+            return limited;
+        }
+
         var file = await _printService.RenderRosterAsync(input, cancellationToken);
 
         return File(file.Content, file.ContentType, file.FileName);

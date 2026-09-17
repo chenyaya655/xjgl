@@ -6,6 +6,7 @@ using Volo.Abp.AspNetCore.Mvc;
 using Xjgl.Permissions;
 using Xjgl.Photos;
 using Xjgl.Photos.Dtos;
+using Xjgl.RateLimiting;
 
 namespace Xjgl.Controllers;
 
@@ -32,15 +33,18 @@ public class PhotosController : XjglController
     private readonly IPhotoUploadService _uploadService;
     private readonly IPhotoContentService _contentService;
     private readonly IPhotoExportService _exportService;
+    private readonly ITokenBucketRateLimiter _rateLimiter;
 
     public PhotosController(
         IPhotoUploadService uploadService,
         IPhotoContentService contentService,
-        IPhotoExportService exportService)
+        IPhotoExportService exportService,
+        ITokenBucketRateLimiter rateLimiter)
     {
         _uploadService = uploadService;
         _contentService = contentService;
         _exportService = exportService;
+        _rateLimiter = rateLimiter;
     }
 
     /// <summary>
@@ -57,11 +61,19 @@ public class PhotosController : XjglController
     [HttpPost("upload")]
     [Authorize(MetadataPermissions.Pho.Photo.Upload)]
     [RequestSizeLimit(200 * 1024 * 1024)]
-    public async Task<PhotoUploadResultDto> UploadAsync(
+    public async Task<IActionResult> UploadAsync(
         [FromForm] List<IFormFile> files,
         [FromForm] List<Guid> studentIds,
         [FromForm] Guid? batchId = null)
     {
+        // 限流放在最前面：被挡住时连表单都不必解析
+        var limited = await EnforceRateLimitAsync(_rateLimiter, RateLimitPolicies.PhotoUpload, "photo-upload");
+
+        if (limited != null)
+        {
+            return limited;
+        }
+
         if (files == null || files.Count == 0)
         {
             throw new UserFriendlyException("请选择要上传的照片。");
@@ -93,7 +105,7 @@ public class PhotosController : XjglController
 
         try
         {
-            return await _uploadService.UploadBatchAsync(batchId ?? Guid.NewGuid(), requests);
+            return Ok(await _uploadService.UploadBatchAsync(batchId ?? Guid.NewGuid(), requests));
         }
         finally
         {
@@ -118,11 +130,18 @@ public class PhotosController : XjglController
     [HttpPost("upload-one")]
     [Authorize(MetadataPermissions.Pho.Photo.Upload)]
     [RequestSizeLimit(20 * 1024 * 1024)]
-    public async Task<PhotoUploadItemResultDto> UploadOneAsync(
+    public async Task<IActionResult> UploadOneAsync(
         IFormFile file,
         [FromForm] Guid studentId,
         [FromForm] Guid? batchId = null)
     {
+        var limited = await EnforceRateLimitAsync(_rateLimiter, RateLimitPolicies.PhotoUpload, "photo-upload");
+
+        if (limited != null)
+        {
+            return limited;
+        }
+
         if (file == null)
         {
             throw new UserFriendlyException("请选择要上传的照片。");
@@ -130,7 +149,7 @@ public class PhotosController : XjglController
 
         await using var stream = file.OpenReadStream();
 
-        return await _uploadService.UploadOneAsync(
+        return Ok(await _uploadService.UploadOneAsync(
             new PhotoUploadRequest
             {
                 StudentId = studentId,
@@ -138,7 +157,7 @@ public class PhotosController : XjglController
                 Length = file.Length,
                 Content = stream
             },
-            batchId);
+            batchId));
     }
 
     /// <summary>
@@ -183,6 +202,18 @@ public class PhotosController : XjglController
         [FromQuery] PhotoExportQueryDto input,
         CancellationToken cancellationToken)
     {
+        // 导出要读大量文件并压缩，比查询重得多，单独给它一个更严的策略
+        var limited = await EnforceRateLimitAsync(
+            _rateLimiter,
+            RateLimitPolicies.PhotoExport,
+            "photo-export",
+            cancellationToken: cancellationToken);
+
+        if (limited != null)
+        {
+            return limited;
+        }
+
         var result = await _exportService.ExportAsync(input, cancellationToken);
 
         return File(result.Content, "application/zip", result.FileName);
