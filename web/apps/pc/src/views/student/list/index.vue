@@ -2,9 +2,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { orgApi, studentApi, studentImportApi } from '@xjgl/api'
+import { orgApi, studentApi, studentImportApi, codeApi } from '@xjgl/api'
 import type { ImportColumn, ImportStudentsResult, OrgDto, StudentListItem } from '@xjgl/api'
 import AppIcon from '@/components/AppIcon.vue'
+import StudentProfileDrawer from '@/components/StudentProfileDrawer.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -35,13 +36,19 @@ const query = reactive({
 /** 当前页码（1 起）。分页组件用的是页码，接口要的是 skipCount，两者在这里换算。 */
 const page = ref(1)
 
-const statusOptions = [
-  { value: 'Studying', label: '在读' },
-  { value: 'Suspended', label: '休学' },
-  { value: 'Transferred', label: '转出' },
-  { value: 'Graduated', label: '毕业' },
-  { value: 'Dropped', label: '退学' }
-]
+/**
+ * 学籍状态下拉项**来自码表**（STUDENT_STATUS），不在前端硬编码。
+ *
+ * 这里踩过一个典型的坑：原来写的是 `{ value: 'Studying', label: '在读' }`，
+ * 而后端的学籍状态是**码值**（01/02/…）。后果有两层：
+ *   1) 按状态过滤时后端拿 'Studying' 去比对，**静默返回空列表**（HTTP 200，不报错）；
+ *   2) 表格里的状态标签也用这个字符串判断，于是所有状态都渲染成灰色。
+ * 改成从码表取值，就不会再出现"前端一套值、后端一套值"。
+ */
+const statusOptions = ref<{ value: string; label: string }[]>([])
+
+/** 在校状态码（与后端 StudentStatuses.IsInSchool 的含义一致：在读/复学/转入）。 */
+const IN_SCHOOL_CODES = ['01', '03', '05']
 
 async function loadSchools(): Promise<void> {
   try {
@@ -50,6 +57,17 @@ async function loadSchools(): Promise<void> {
   } catch {
     // 组织接口失败时不阻塞列表：用户仍可用关键字查询（受后端数据权限约束）
     schools.value = []
+  }
+}
+
+async function loadStatusOptions(): Promise<void> {
+  try {
+    const items = await codeApi.getItemsByCode('STUDENT_STATUS')
+
+    statusOptions.value = items.map((i) => ({ value: i.code, label: i.name }))
+  } catch {
+    // 码表拿不到时下拉框为空，但列表仍可用（过滤功能降级，不阻塞页面）
+    statusOptions.value = []
   }
 }
 
@@ -87,6 +105,18 @@ function reset(): void {
 
 function formatDate(value?: string | null): string {
   return value ? value.slice(0, 10) : '—'
+}
+
+// ---------------------------------------------------------------------------
+// 学生档案（子表）
+// ---------------------------------------------------------------------------
+
+const profileVisible = ref(false)
+const profileStudent = ref<StudentListItem | null>(null)
+
+function openProfile(row: StudentListItem): void {
+  profileStudent.value = row
+  profileVisible.value = true
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +232,7 @@ async function doImport(): Promise<void> {
 }
 
 onMounted(async () => {
-  await loadSchools()
+  await Promise.all([loadSchools(), loadStatusOptions()])
   await load()
 })
 </script>
@@ -306,7 +336,7 @@ onMounted(async () => {
 
         <el-table-column label="学籍状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.studentStatusCode === 'Studying' ? 'success' : 'info'">
+            <el-tag size="small" :type="IN_SCHOOL_CODES.includes(row.studentStatusCode) ? 'success' : 'info'">
               {{ row.studentStatusName ?? row.studentStatusCode }}
             </el-tag>
           </template>
@@ -316,6 +346,12 @@ onMounted(async () => {
           <template #default="{ row }">
             <el-tag v-if="row.hasPhoto" size="small" type="success" effect="plain">已上传</el-tag>
             <el-tag v-else size="small" type="danger" effect="plain">缺失</el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="90" align="center" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openProfile(row)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -400,6 +436,9 @@ onMounted(async () => {
         <el-button @click="importVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 学生档案（监护人 / 简历 / 奖励 / 处分 / 资助 / 体检） -->
+    <StudentProfileDrawer v-model="profileVisible" :student="profileStudent" @changed="load" />
   </div>
 </template>
 

@@ -721,6 +721,21 @@ export interface CodeItem {
   children: CodeItem[]
 }
 
+/**
+ * 按类别编码取回的码项（下拉框用）。
+ *
+ * 与 `CodeItem` 的区别：**没有 id**（只有 code/name），
+ * 因为它的用途是"把码值翻译成中文"或"给下拉框提供选项"，
+ * 这类场景只需要码值与名称。
+ */
+export interface CodeItemLookup {
+  code: string
+  name: string
+  parentCode?: string | null
+  treeLevel: number
+  isEnabled: boolean
+}
+
 export interface CreateUpdateCodeCategory {
   code: string
   name: string

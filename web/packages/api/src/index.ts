@@ -13,6 +13,7 @@ import type {
   ChangeType,
   CodeCategory,
   CodeItem,
+  CodeItemLookup,
   CreatePredefineUser,
   CreateUpdateChangeType,
   CreateUpdateCodeCategory,
@@ -411,12 +412,33 @@ export const codeApi = {
   },
 
   async removeCategory(id: string): Promise<void> {
-    await http.delete(`${ENDPOINTS.code}/${id}/category`)
+    await http.delete<void>(`${ENDPOINTS.code}/${id}/category`)
   },
 
   async getItems(categoryId: string, onlyEnabled = false, asTree = false): Promise<CodeItem[]> {
     const { data } = await http.get<CodeItem[]>(`${ENDPOINTS.code}/items/${categoryId}`, {
       params: { onlyEnabled, asTree }
+    })
+
+    return data
+  },
+
+  /**
+   * 按**类别编码**取码项（下拉框用）。
+   *
+   * ⚠ 参数是查询串而不是路径段：ABP 约定只把名为 id 的参数放进路径，
+   *    `categoryCode` 会被当作查询参数（已用真实请求确认：
+   *    `GET /api/app/code/items-by-code?categoryCode=GUARDIAN_RELATION` → 200）。
+   *
+   * 为什么要有它：下拉框里的"在读/休学"必须对应数据库里的码值（01/02…）。
+   * 前端手写 `{ value: 'Studying', label: '在读' }` 这类选项，
+   * 后端拿到的是一个它不认识的字符串 —— 过滤时会静默返回空结果，
+   * 更糟的是异动类型会把 AfterStatusCode 存成 'Studying'，
+   * 审批通过后**直接写进学生的学籍状态**（实测踩过，见提交说明）。
+   */
+  async getItemsByCode(categoryCode: string, onlyEnabled = true): Promise<CodeItemLookup[]> {
+    const { data } = await http.get<CodeItemLookup[]>(`${ENDPOINTS.code}/items-by-code`, {
+      params: { categoryCode, onlyEnabled }
     })
 
     return data
@@ -435,7 +457,7 @@ export const codeApi = {
   },
 
   async removeItem(id: string): Promise<void> {
-    await http.delete(`${ENDPOINTS.code}/${id}/item`)
+    await http.delete<void>(`${ENDPOINTS.code}/${id}/item`)
   },
 
   /** 码值变更后清缓存（一般写操作已自动失效，这里给一个手动入口）。 */

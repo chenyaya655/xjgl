@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Volo.Abp;
 using Volo.Abp.Timing;
+using Xjgl.Codes;
 using Xjgl.Data;
 using Xjgl.Organizations;
 using Xjgl.Permissions;
@@ -13,12 +14,16 @@ namespace Xjgl.Changes;
 [Authorize]
 public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
 {
+    /// <summary>学籍状态码的码表编码（BeforeStatusCode / AfterStatusCode 必须取自它）。</summary>
+    private const string StudentStatusCodeCategory = "STUDENT_STATUS";
+
     private readonly IXjglRepository<StuChangeType> _types;
     private readonly IXjglRepository<StuChangeFlowTemplate> _templates;
     private readonly IXjglRepository<StuChangeFlowNode> _nodes;
     private readonly IXjglRepository<SysOrg> _orgs;
     private readonly IChangeFlowPlanner _planner;
     private readonly IClock _clock;
+    private readonly ICodeAppService _codes;
 
     public ChangeTypeAppService(
         IXjglRepository<StuChangeType> types,
@@ -26,7 +31,8 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
         IXjglRepository<StuChangeFlowNode> nodes,
         IXjglRepository<SysOrg> orgs,
         IChangeFlowPlanner planner,
-        IClock clock)
+        IClock clock,
+        ICodeAppService codes)
     {
         _types = types;
         _templates = templates;
@@ -34,6 +40,7 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
         _orgs = orgs;
         _planner = planner;
         _clock = clock;
+        _codes = codes;
     }
 
     // ------------------------------------------------------------------
@@ -69,6 +76,8 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
                 .WithData("reason", $"未知的审核级别「{input.MaxApproveLevel}」");
         }
 
+        await EnsureStudentStatusCodesAsync(input);
+
         var entity = new StuChangeType(GuidGenerator.Create(), code, input.Name.Trim(), input.MaxApproveLevel);
 
         ApplyTypeInput(entity, input);
@@ -88,6 +97,8 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
             throw new BusinessException(XjglDomainErrorCodes.ValidationFailed)
                 .WithData("reason", $"未知的审核级别「{input.MaxApproveLevel}」");
         }
+
+        await EnsureStudentStatusCodesAsync(input);
 
         entity.Name = input.Name.Trim();
         entity.MaxApproveLevel = input.MaxApproveLevel;
@@ -411,6 +422,50 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
         }
 
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 校验 BeforeStatusCode / AfterStatusCode 是合法的学籍状态码。
+    ///
+    /// **为什么必须在配置阶段就校验**：这两个字段会在审批通过时**直接写进学生的学籍状态**
+    /// （`ChangeFlowAppService`：`student.StudentStatusCode = apply.TargetStatusCode`）。
+    /// 早期 PC 端的下拉框写的是 `{ value: 'Studying', label: '在读' }`，
+    /// 后端照单全收 —— 于是审批一次就把学生状态写成了码表里不存在的 'Studying'：
+    /// 列表里状态名显示为空、按状态过滤查不到、统计口径也跟着错。
+    /// 这类"写坏数据"的问题修起来比拦住它贵得多。
+    /// </summary>
+    private async Task EnsureStudentStatusCodesAsync(CreateUpdateChangeTypeDto input)
+    {
+        var codes = new[] { input.BeforeStatusCode, input.AfterStatusCode }
+            .Where(c => !c.IsNullOrWhiteSpace())
+            .Select(c => c!.Trim())
+            .Distinct()
+            .ToList();
+
+        if (codes.Count == 0)
+        {
+            return;
+        }
+
+        var items = await _codes.GetItemsByCodeAsync(StudentStatusCodeCategory);
+
+        // 码表还没导入时不做校验：**不能因为字典没准备好就让所有异动类型都存不下去**
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var valid = items.Select(i => i.Code).ToHashSet(StringComparer.Ordinal);
+        var invalid = codes.Where(c => !valid.Contains(c)).ToList();
+
+        if (invalid.Count > 0)
+        {
+            throw new BusinessException(XjglDomainErrorCodes.ValidationFailed)
+                .WithData(
+                    "reason",
+                    $"学籍状态码不合法：{string.Join("、", invalid)}。" +
+                    "应填码表 STUDENT_STATUS 中的码值（如 01=在读、02=休学），而不是英文名称。");
+        }
     }
 
     private static void ApplyTypeInput(

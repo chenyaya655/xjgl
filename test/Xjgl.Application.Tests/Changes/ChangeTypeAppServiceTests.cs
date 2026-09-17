@@ -1,6 +1,7 @@
 using Shouldly;
 using Volo.Abp;
 using Xjgl.Organizations;
+using Xjgl.Students;
 using Xunit;
 
 namespace Xjgl.Changes;
@@ -73,6 +74,69 @@ public class ChangeTypeAppServiceTests : XjglIntegrationTestBase
         {
             Seq = seq, NodeName = name, OrgResolver = resolver, RoleCode = role
         };
+    }
+
+    // ------------------------------------------------------------------
+    // 学籍状态码校验（前端曾把 'Studying' 这种英文名写进这两个字段，
+    // 而它们会在审批通过时**直接写进学生的学籍状态**）
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task 异动类型_学籍状态码写成英文名_被拒绝()
+    {
+        var ex = await Should.ThrowAsync<BusinessException>(() =>
+            _changeType.CreateTypeAsync(new CreateUpdateChangeTypeDto
+            {
+                Code = NewCode("T_"),
+                Name = "英文状态码",
+                MaxApproveLevel = ApproveLevels.City,
+                BeforeStatusCode = "Studying",
+                AfterStatusCode = "Studying"
+            }));
+
+        ex.Data["reason"].ToString().ShouldContain("学籍状态码不合法");
+        ex.Data["reason"].ToString().Contains("STUDENT_STATUS").ShouldBeTrue("错误提示要告诉用户去哪儿找合法码值");
+    }
+
+    [Fact]
+    public async Task 异动类型_合法状态码_可以保存()
+    {
+        var created = await _changeType.CreateTypeAsync(new CreateUpdateChangeTypeDto
+        {
+            Code = NewCode("T_"),
+            Name = "合法状态码",
+            MaxApproveLevel = ApproveLevels.City,
+            BeforeStatusCode = StudentStatuses.Studying,
+            AfterStatusCode = StudentStatuses.TransferredIn
+        });
+
+        created.BeforeStatusCode.ShouldBe("01");
+        created.AfterStatusCode.ShouldBe("05");
+    }
+
+    [Fact]
+    public async Task 异动类型_修改时传入英文状态码_被拒绝且原值不变()
+    {
+        var created = await CreateTypeAsync();
+
+        // 用 "Studying"（恰好 8 个字符）：它会通过 DTO 的 [StringLength(8)]，
+        // 从而真正走到"码值是否存在于码表"这条业务校验上。
+        // 顺带记一个坑：写 "Transferred"（11 字符）会先被 DTO 长度规则挡下（HTTP 400），
+        // 根本到不了业务校验 —— 排查时很容易误以为校验没生效。
+        var ex = await Should.ThrowAsync<BusinessException>(() =>
+            _changeType.UpdateTypeAsync(created.Id, new CreateUpdateChangeTypeDto
+            {
+                Code = created.Code,
+                Name = created.Name,
+                MaxApproveLevel = ApproveLevels.City,
+                AfterStatusCode = "Studying"
+            }));
+
+        ex.Data["reason"].ToString().ShouldContain("学籍状态码不合法");
+
+        var types = await _changeType.GetTypesAsync(false);
+
+        types.Single(t => t.Id == created.Id).AfterStatusCode.ShouldBe("05", "校验失败不能留下半截修改");
     }
 
     /// <summary>省 → 甲乙两县 → 每县各一所学校。</summary>

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { changeTypeApi, orgApi } from '@/api'
+import { changeTypeApi, codeApi, orgApi } from '@/api'
 import type {
   ChangeFlowTemplate,
   ChangeType,
@@ -45,13 +45,34 @@ const loading = ref(false)
 const types = ref<ChangeType[]>([])
 const schools = ref<OrgDto[]>([])
 
-const studentStatusOptions = [
-  { value: 'Studying', label: '在读' },
-  { value: 'Suspended', label: '休学' },
-  { value: 'Transferred', label: '转出' },
-  { value: 'Graduated', label: '毕业' },
-  { value: 'Dropped', label: '退学' }
-]
+/**
+ * 学籍状态下拉项**来自码表**（STUDENT_STATUS），不在前端硬编码。
+ *
+ * 这里原来是 `{ value: 'Studying', label: '在读' }` 这样的英文名，而这两个字段
+ * （beforeStatusCode / afterStatusCode）会在**审批通过时直接写进学生的学籍状态**。
+ * 也就是说：配错一次，审批一次，就给学生写上了一个码表里不存在的状态值。
+ * 后端也加了同样的校验（ChangeTypeAppService.EnsureStudentStatusCodesAsync），
+ * 双保险：前端不给错选项，后端不接受错值。
+ */
+const studentStatusOptions = ref<{ value: string; label: string }[]>([])
+
+function statusLabel(code?: string | null): string {
+  if (!code) {
+    return '—'
+  }
+
+  return studentStatusOptions.value.find((o) => o.value === code)?.label ?? code
+}
+
+async function loadStudentStatusOptions(): Promise<void> {
+  try {
+    const items = await codeApi.getItemsByCode('STUDENT_STATUS')
+
+    studentStatusOptions.value = items.map((i) => ({ value: i.code, label: i.name }))
+  } catch {
+    studentStatusOptions.value = []
+  }
+}
 
 const levelOptions = Object.values(ApproveLevels).map((v) => ({
   value: v,
@@ -85,8 +106,8 @@ function emptyType(): CreateUpdateChangeType {
     code: '',
     name: '',
     categoryCode: null,
-    beforeStatusCode: 'Studying',
-    afterStatusCode: 'Studying',
+    beforeStatusCode: null,
+    afterStatusCode: null,
     maxApproveLevel: ApproveLevels.City,
     needPeerSchoolConfirm: false,
     affectGrade: false,
@@ -372,6 +393,7 @@ onMounted(async () => {
     schools.value = []
   }
 
+  await loadStudentStatusOptions()
   await load()
 })
 </script>
@@ -408,7 +430,7 @@ onMounted(async () => {
         <el-table-column prop="name" label="名称" min-width="150" />
         <el-table-column label="学籍状态" width="150" align="center">
           <template #default="{ row }">
-            {{ row.beforeStatusCode || '—' }} → {{ row.afterStatusCode || '—' }}
+            {{ statusLabel(row.beforeStatusCode) }} → {{ statusLabel(row.afterStatusCode) }}
           </template>
         </el-table-column>
         <el-table-column prop="maxApproveLevelName" label="最高审核级别" width="120" align="center" />
