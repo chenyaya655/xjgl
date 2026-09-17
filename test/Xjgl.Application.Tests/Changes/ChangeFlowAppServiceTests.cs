@@ -201,7 +201,9 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
 
     private void SignIn()
     {
-        _principal.SetUser(Guid.NewGuid(), "change_tester");
+        // 以管理员身份跑流程用例：本类只验证"流程实例化与合并、审核推进"是否正确，
+        // 与"谁有权看哪些数据"无关。数据范围另有一组专门的用例（DataScopeTests）。
+        _principal.SetUser(Guid.NewGuid(), "change_tester", "admin");
     }
 
     // ==================================================================

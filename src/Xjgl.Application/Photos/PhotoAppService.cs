@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Logging;
+using Volo.Abp;
 using Volo.Abp.Application.Dtos;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.Timing;
@@ -30,6 +31,7 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     private readonly LocalFallbackPhotoStorage _fallback;
     private readonly IPhotoCompensationService _compensation;
     private readonly IClock _clock;
+    private readonly IUserDataScopeProvider _dataScopeProvider;
 
     public PhotoAppService(
         IXjglRepository<StuPhoto> photos,
@@ -41,7 +43,8 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         NasPhotoStorage primary,
         LocalFallbackPhotoStorage fallback,
         IPhotoCompensationService compensation,
-        IClock clock)
+        IClock clock,
+        IUserDataScopeProvider dataScopeProvider)
     {
         _photos = photos;
         _students = students;
@@ -53,6 +56,7 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         _fallback = fallback;
         _compensation = compensation;
         _clock = clock;
+        _dataScopeProvider = dataScopeProvider;
     }
 
     // ------------------------------------------------------------------
@@ -62,7 +66,14 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     [Authorize(MetadataPermissions.Pho.Photo.Query)]
     public async Task<PagedResultDto<PhotoDto>> GetListAsync(PhotoQueryDto input)
     {
-        var predicate = BuildPredicate(input);
+        var scope = await _dataScopeProvider.GetAsync();
+
+        if (scope.IsEmpty)
+        {
+            return new PagedResultDto<PhotoDto>(0, new List<PhotoDto>());
+        }
+
+        var predicate = BuildPredicate(input, scope);
         var sorting = string.IsNullOrWhiteSpace(input.Sorting) ? "UploadedTime DESC" : input.Sorting;
 
         var totalCount = await _photos.GetCountAsync(predicate);
@@ -79,6 +90,9 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     public async Task<PhotoDto> GetAsync(Guid id)
     {
         var entity = await _photos.GetAsync(id);
+
+        await EnsureInDataScopeAsync(entity);
+
         return ToDto(entity);
     }
 
@@ -93,7 +107,14 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     [Authorize(MetadataPermissions.Pho.Photo.Query)]
     public async Task<PagedResultDto<MissingPhotoStudentDto>> GetMissingPhotoListAsync(MissingPhotoQueryDto input)
     {
-        var predicate = BuildMissingPredicate(input);
+        var scope = await _dataScopeProvider.GetAsync();
+
+        if (scope.IsEmpty)
+        {
+            return new PagedResultDto<MissingPhotoStudentDto>(0, new List<MissingPhotoStudentDto>());
+        }
+
+        var predicate = BuildMissingPredicate(input, scope);
         var sorting = string.IsNullOrWhiteSpace(input.Sorting) ? "StudentNo ASC" : input.Sorting;
 
         var totalCount = await _students.GetCountAsync(predicate);
@@ -143,6 +164,9 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     public async Task DeleteAsync(Guid id)
     {
         var entity = await _photos.GetAsync(id);
+
+        await EnsureInDataScopeAsync(entity);
+
         await RemoveAsync(new[] { entity });
     }
 
@@ -159,6 +183,13 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         if (entities.Count == 0)
         {
             return 0;
+        }
+
+        // 批量删除逐条校验数据范围：夹带一条别人学校的数据就整批拒绝，
+        // 比"默默只删掉自己能删的"更安全也更容易解释（用户会立刻发现参数不对）
+        foreach (var entity in entities)
+        {
+            await EnsureInDataScopeAsync(entity);
         }
 
         await RemoveAsync(entities);
@@ -282,7 +313,7 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     // 谓词与映射
     // ------------------------------------------------------------------
 
-    private static Expression<Func<StuPhoto, bool>>? BuildPredicate(PhotoQueryDto input)
+    private static Expression<Func<StuPhoto, bool>>? BuildPredicate(PhotoQueryDto input, UserDataScope scope)
     {
         var hasStudent = input.StudentId.HasValue;
         var hasSchool = input.SchoolOrgId.HasValue;
@@ -290,7 +321,19 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         var hasStatus = !string.IsNullOrWhiteSpace(input.Status);
         var hasKeyword = !string.IsNullOrWhiteSpace(input.Keyword);
 
-        if (!hasStudent && !hasSchool && !hasBatch && !hasStatus && !hasKeyword)
+        // 数据范围：本级及下级 → 前缀匹配；仅本级 → 前缀取哨兵值使 StartsWith 永不命中。
+        // 为什么不在表达式里写三元：SqlSugar 会翻译成 SqlFunc.IIF 并直接报
+        // "argument do not support"（与学员模块同一个坑）。
+        var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
+        var scopeChildPrefix = scopePathCode == null
+            ? null
+            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+        var hasScopePath = !string.IsNullOrWhiteSpace(scopePathCode);
+        var hasScopeChildPrefix = !string.IsNullOrWhiteSpace(scopeChildPrefix);
+
+        // 注意：hasScopePath 也参与"无过滤条件"的判断 ——
+        // 否则带数据范围时返回 null 谓词，等于范围约束被丢掉（这正是要防的漏洞）
+        if (!hasStudent && !hasSchool && !hasBatch && !hasStatus && !hasKeyword && !hasScopePath)
         {
             return null;
         }
@@ -304,6 +347,9 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         return p =>
             (!hasStudent || p.StudentId == studentId)
             && (!hasSchool || p.SchoolOrgId == schoolOrgId)
+            && (!hasScopePath || (p.SchoolPathCode != null &&
+                (p.SchoolPathCode == scopePathCode
+                 || (hasScopeChildPrefix && p.SchoolPathCode.StartsWith(scopeChildPrefix!)))))
             && (!hasBatch || p.BatchId == batchId)
             && (!hasStatus || p.Status == status)
             && (!hasKeyword
@@ -311,12 +357,21 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
                 || (p.StudentName != null && p.StudentName.Contains(keyword!)));
     }
 
-    private static Expression<Func<StuStudent, bool>>? BuildMissingPredicate(MissingPhotoQueryDto input)
+    private static Expression<Func<StuStudent, bool>>? BuildMissingPredicate(
+        MissingPhotoQueryDto input,
+        UserDataScope scope)
     {
         var hasSchool = input.SchoolOrgId.HasValue;
         var hasGrade = input.GradeId.HasValue;
         var hasClass = input.ClassId.HasValue;
         var hasKeyword = !string.IsNullOrWhiteSpace(input.Keyword);
+
+        var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
+        var scopeChildPrefix = scopePathCode == null
+            ? null
+            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+        var hasScopePath = !string.IsNullOrWhiteSpace(scopePathCode);
+        var hasScopeChildPrefix = !string.IsNullOrWhiteSpace(scopeChildPrefix);
 
         var schoolOrgId = input.SchoolOrgId ?? Guid.Empty;
         var gradeId = input.GradeId ?? Guid.Empty;
@@ -326,13 +381,39 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         return s =>
             (s.PhotoPath == null || s.PhotoPath == "")
             && (!hasSchool || s.SchoolOrgId == schoolOrgId)
+            && (!hasScopePath || (s.SchoolPathCode != null &&
+                (s.SchoolPathCode == scopePathCode
+                 || (hasScopeChildPrefix && s.SchoolPathCode.StartsWith(scopeChildPrefix!)))))
             && (!hasGrade || s.GradeId == gradeId)
             && (!hasClass || s.ClassId == classId)
             && (!hasKeyword || s.Name.Contains(keyword!) || s.StudentNo.Contains(keyword!));
     }
 
-    private static PhotoDto ToDto(StuPhoto entity) => new()
+    /// <summary>
+    /// 用于表达"仅本级"的哨兵前缀（与学员模块同一个约定）：
+    /// 一个在真实物化路径里不可能出现的字符，使 StartsWith 永不命中，
+    /// 于是"仅本级"只剩"路径完全相等"这一条 —— 且不必在表达式里写三元。
+    /// </summary>
+    private const string ImpossiblePathPrefix = "\u0001";
+
+    /// <summary>
+    /// 单张照片的数据范围校验（读取、删除都要过这一关）。
+    ///
+    /// 照片是学生隐私数据，与学籍信息同等敏感：一个县区管理员
+    /// 不应该能通过"猜 Id"拿到别的县学生的照片。
+    /// </summary>
+    private async Task EnsureInDataScopeAsync(StuPhoto photo)
     {
+        var scope = await _dataScopeProvider.GetAsync();
+
+        if (!scope.AllowsEntityPath(photo.SchoolPathCode))
+        {
+            throw new BusinessException(XjglDomainErrorCodes.UserNotInDataScope)
+                .WithData("reason", "该照片不在您的数据范围内");
+        }
+    }
+
+    private static PhotoDto ToDto(StuPhoto entity) => new()    {
         Id = entity.Id,
         StudentId = entity.StudentId,
         StudentNo = entity.StudentNo,

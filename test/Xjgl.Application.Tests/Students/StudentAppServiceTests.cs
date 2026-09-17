@@ -240,8 +240,14 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
         loaded.HasRareCharacter.ShouldBeTrue();
 
         // 按姓名关键字能查到（生僻字按原样匹配）
+        //
+        // 注意必须同时按学校过滤：测试库会累积历史数据，而每次运行都会新增一个
+        // 同名的"𰻞田"学生；只按关键字查、再取前 20 条时，新学生可能被挤出结果集 ——
+        // 表现为"某次运行突然失败、再跑一次又过了"的偶发失败。
+        // 本次学校是新建的，因此加上学校条件后结果稳定唯一。
         var list = await _studentAppService.GetListAsync(new StudentQueryDto
         {
+            SchoolOrgId = school.Id,
             Keyword = "\U00020BB7田",
             MaxResultCount = 20
         });

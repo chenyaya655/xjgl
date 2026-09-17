@@ -22,4 +22,22 @@
     <PackageReference Include="Shouldly" Version="4.3.0" />
   </ItemGroup>
 
+  <!--
+    关闭测试并行执行（parallelizeTestCollections=false）。
+
+    为什么必须关：集成测试里"当前登录用户"是通过 FakeCurrentPrincipalAccessor
+    模拟的，它注册为**单例**（ICurrentPrincipalAccessor 本来就是进程级概念）。
+    xunit 默认让不同测试类并行，于是两个测试会互相覆盖对方的登录身份 ——
+    表现为偶发失败，而且失败位置与真正原因毫无关系。
+
+    这个坑是在实现数据范围时暴露的：别测试类都以 admin 登录，
+    而数据范围测试需要以县区管理员/校级账号登录，身份被覆盖后断言全部失效。
+
+    代价是套件串行（本机约 1~2 分钟）。测试偶发失败又查不出原因，
+    比测试慢几分钟昂贵得多。
+  -->
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -47,6 +47,15 @@ public class StuPhoto : FullAuditedAggregateRoot<Guid>, IXjglBusinessEntity
 
     public Guid SchoolOrgId { get; set; }
 
+    /// <summary>
+    /// 学校的物化路径（冗余，便于按数据范围前缀过滤）。
+    ///
+    /// 与学生主表的 <c>SchoolPathCode</c> 同一设计：数据范围过滤必须是
+    /// **一次前缀比较**，而不是"先查出一堆组织 Id 再 IN"。
+    /// 照片是学生隐私数据，同样不能让人按任意学校 Id 查别人学校的照片。
+    /// </summary>
+    public string? SchoolPathCode { get; set; }
+
     /// <summary>相对路径，如 photo/4101020001/4101020001000123.jpg。</summary>
     public string RelativePath { get; set; } = default!;
 

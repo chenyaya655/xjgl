@@ -395,6 +395,8 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         row.StudentNo = item.Student!.StudentNo;
         row.StudentName = item.Student.Name;
         row.SchoolOrgId = item.Student.SchoolOrgId;
+        // 冗余学校物化路径：数据范围过滤靠它做一次前缀比较
+        row.SchoolPathCode = item.Student.SchoolPathCode;
         row.Status = status;
         row.ErrorMessage = error;
         row.BatchId = batchId;

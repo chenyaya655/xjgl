@@ -37,6 +37,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
     private readonly ISettingProvider _settingProvider;
     private readonly IConfiguration _configuration;
     private readonly IClock _clock;
+    private readonly IUserDataScopeProvider _dataScopeProvider;
 
     public StudentAppService(
         IXjglRepository<StuStudent> students,
@@ -48,7 +49,8 @@ public class StudentAppService : XjglAppService, IStudentAppService
         IStringEncryptionService stringEncryptionService,
         ISettingProvider settingProvider,
         IConfiguration configuration,
-        IClock clock)
+        IClock clock,
+        IUserDataScopeProvider dataScopeProvider)
     {
         _students = students;
         _orgs = orgs;
@@ -60,6 +62,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
         _settingProvider = settingProvider;
         _configuration = configuration;
         _clock = clock;
+        _dataScopeProvider = dataScopeProvider;
     }
 
     // ------------------------------------------------------------------
@@ -68,7 +71,32 @@ public class StudentAppService : XjglAppService, IStudentAppService
 
     public async Task<PagedResultDto<StudentListItemDto>> GetListAsync(StudentQueryDto input)
     {
-        var predicate = await BuildPredicateAsync(input);
+        var scope = await _dataScopeProvider.GetAsync();
+
+        // 未关联组织且非超管：**返回空，而不是报错**。
+        // 列表接口报错会把"这个人没有数据权限"变成界面上的一个红条，
+        // 而正确的产品行为是他本来就看不到任何数据（空列表）。
+        if (scope.IsEmpty)
+        {
+            return new PagedResultDto<StudentListItemDto>(0, new List<StudentListItemDto>());
+        }
+
+        // 请求的组织必须在数据范围内：不在范围内**直接返回空**，不去查库。
+        //
+        // 注意这里不能用 `s => false` 之类"恒假谓词"来短路 ——
+        // SqlSugar 无法把它翻译成 SQL，会直接抛异常（实测踩过）。
+        // 空结果的判断放在调用方（也就是这里），谓词构造只负责拼条件。
+        if (input.SchoolOrgId.HasValue)
+        {
+            var requestedOrg = await _orgs.FindAsync(input.SchoolOrgId.Value);
+
+            if (requestedOrg == null || !scope.AllowsRequestedOrgPath(requestedOrg.PathCode))
+            {
+                return new PagedResultDto<StudentListItemDto>(0, new List<StudentListItemDto>());
+            }
+        }
+
+        var predicate = await BuildPredicateAsync(input, scope);
 
         var items = await _students.GetPagedListAsync(
             predicate,
@@ -84,6 +112,10 @@ public class StudentAppService : XjglAppService, IStudentAppService
     public async Task<StudentDto> GetAsync(Guid id)
     {
         var student = await _students.GetAsync(id);
+
+        // 单条记录：越权要**明确拒绝**而不是返回空 —— 否则调用方会误以为"学生不存在"
+        await EnsureInDataScopeAsync(student);
+
         var listItem = (await ToListItemsAsync(new List<StuStudent> { student })).Single();
 
         var dto = new StudentDto();
@@ -136,6 +168,10 @@ public class StudentAppService : XjglAppService, IStudentAppService
         }
 
         var school = await EnsureSchoolAsync(input.SchoolOrgId);
+
+        // 只能往自己数据范围内的学校建学生
+        await EnsureOrgInDataScopeAsync(school, "该学校不在您的数据范围内，不能为其新增学生");
+
         var idCard = NormalizeIdCard(input.IdCardNumber);
         var idCardHash = ComputeIdCardHash(idCard);
 
@@ -175,7 +211,13 @@ public class StudentAppService : XjglAppService, IStudentAppService
         }
 
         var entity = await _students.GetAsync(id);
+
+        // 原学校与目标学校都必须在自己范围内（防止把学生"改"到自己看不到的学校）
+        await EnsureInDataScopeAsync(entity);
+
         var school = await EnsureSchoolAsync(input.SchoolOrgId);
+        await EnsureOrgInDataScopeAsync(school, "该学校不在您的数据范围内，不能把学生转到该校");
+
         var idCard = NormalizeIdCard(input.IdCardNumber);
         var idCardHash = ComputeIdCardHash(idCard);
 
@@ -207,8 +249,43 @@ public class StudentAppService : XjglAppService, IStudentAppService
     {
         var entity = await _students.GetAsync(id);
 
+        await EnsureInDataScopeAsync(entity);
+
         // 说明：学生若处于在途异动流程中，P3 完成后要在这里拒绝删除
         await _students.DeleteAsync(entity, autoSave: true);
+    }
+
+    // ------------------------------------------------------------------
+    // 数据范围
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 单条学生的数据范围校验。
+    ///
+    /// 越权访问**明确抛异常**而不是返回空：调用方（以及后面的用户）需要知道
+    /// "这条数据存在但你看不到"，而不是被误导成"这条数据不存在"。
+    /// </summary>
+    private async Task EnsureInDataScopeAsync(StuStudent student)
+    {
+        var scope = await _dataScopeProvider.GetAsync();
+
+        if (!scope.AllowsEntityPath(student.SchoolPathCode))
+        {
+            throw new BusinessException(XjglDomainErrorCodes.UserNotInDataScope)
+                .WithData("reason", "该学生不在您的数据范围内");
+        }
+    }
+
+    /// <summary>某个组织是否在数据范围内（新增/改学校时用）。</summary>
+    private async Task EnsureOrgInDataScopeAsync(SysOrg org, string reason)
+    {
+        var scope = await _dataScopeProvider.GetAsync();
+
+        if (!scope.AllowsRequestedOrgPath(org.PathCode))
+        {
+            throw new BusinessException(XjglDomainErrorCodes.UserNotInDataScope)
+                .WithData("reason", reason);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -386,40 +463,73 @@ public class StudentAppService : XjglAppService, IStudentAppService
     }
 
     private async Task<System.Linq.Expressions.Expression<Func<StuStudent, bool>>?> BuildPredicateAsync(
-        StudentQueryDto input)
+        StudentQueryDto input,
+        UserDataScope scope)
     {
         Guid? exactSchoolId = null;
         string? pathPrefix = null;
 
         if (input.SchoolOrgId.HasValue)
         {
+            var org = await _orgs.FindAsync(input.SchoolOrgId.Value);
+
+            // 组织不存在：当作"查不到"（上层已保证组织在数据范围内时才走到这里）
+            if (org == null)
+            {
+                return null;
+            }
+
             if (input.IncludeDescendantOrgs)
             {
-                var org = await _orgs.FindAsync(input.SchoolOrgId.Value);
-                if (org == null)
-                {
-                    return s => false;
-                }
-
                 pathPrefix = org.PathCode + ".";
             }
             else
             {
-                exactSchoolId = input.SchoolOrgId.Value;
+                exactSchoolId = org.Id;
             }
         }
 
-        return BuildPredicate(input, exactSchoolId, pathPrefix);
+        // 数据范围作为**叠加**在业务条件之上的一层约束。
+        //
+        // 这里刻意把"是否仅本级"在**表达式之外**折算成一个前缀：
+        //   - 本级及下级 → 前缀是 "我的路径."，用 StartsWith 匹配后代；
+        //   - 仅本级     → 前缀是一个不可能出现的字符，于是 StartsWith 永不命中，
+        //                  只剩 "路径完全相等" 这一条生效。
+        // 为什么不直接在表达式里写三元（`exact ? a : b`）：
+        //   SqlSugar 会把条件表达式翻译成 SqlFunc.IIF(...)，而嵌套的路径比较
+        //   它翻译不了，会直接抛 "argument do not support"（实测踩过）。
+        //   在表达式外先算好，树里只剩 SqlSugar 熟悉的 `&&` 与 `StartsWith`。
+        var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
+        var selfOnly = !scope.IsUnrestricted && scope.Scope == DataScopes.SelfOnly;
+        var selfUserId = selfOnly ? scope.UserId : null;
+        var scopeChildPrefix = scopePathCode == null
+            ? null
+            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+
+        return BuildPredicate(input, exactSchoolId, pathPrefix, scopePathCode, scopeChildPrefix, selfUserId);
     }
+
+    /// <summary>
+    /// 用于表达"仅本级"的哨兵前缀：一个在真实物化路径里不可能出现的字符。
+    /// 这样"仅本级"就退化成"前缀永不匹配、只剩路径相等"，从而不必在表达式里写三元。
+    /// </summary>
+    private const string ImpossiblePathPrefix = "\u0001";
 
     private static System.Linq.Expressions.Expression<Func<StuStudent, bool>>? BuildPredicate(
         StudentQueryDto input,
         Guid? exactSchoolId,
-        string? pathPrefix)
+        string? pathPrefix,
+        string? scopePathCode,
+        string? scopeChildPrefix,
+        Guid? selfUserId)
     {
         var hasSchool = exactSchoolId.HasValue;
         var schoolId = exactSchoolId.GetValueOrDefault();
         var hasPath = !pathPrefix.IsNullOrWhiteSpace();
+        var hasScopePath = !scopePathCode.IsNullOrWhiteSpace();
+        var hasScopeChildPrefix = !scopeChildPrefix.IsNullOrWhiteSpace();
+        var hasSelfOnly = selfUserId.HasValue;
+        var selfId = selfUserId.GetValueOrDefault();
         var hasYear = !input.AcademicYear.IsNullOrWhiteSpace();
         var hasGrade = input.GradeId.HasValue;
         var hasClass = input.ClassId.HasValue;
@@ -427,7 +537,8 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var hasGender = !input.GenderCode.IsNullOrWhiteSpace();
         var hasKeyword = !input.Keyword.IsNullOrWhiteSpace();
 
-        if (!hasSchool && !hasPath && !hasYear && !hasGrade && !hasClass && !hasStatus && !hasGender && !hasKeyword)
+        if (!hasSchool && !hasPath && !hasScopePath && !hasYear && !hasGrade && !hasClass
+            && !hasStatus && !hasGender && !hasKeyword)
         {
             return null;
         }
@@ -442,6 +553,12 @@ public class StudentAppService : XjglAppService, IStudentAppService
         return s =>
             (!hasSchool || s.SchoolOrgId == schoolId) &&
             (!hasPath || (s.SchoolPathCode != null && s.SchoolPathCode.StartsWith(pathPrefix!))) &&
+            // 数据范围：路径完全相等，或落在"我的路径."前缀之下（仅本级时前缀不可能命中）
+            (!hasScopePath || (s.SchoolPathCode != null &&
+                (s.SchoolPathCode == scopePathCode
+                 || (hasScopeChildPrefix && s.SchoolPathCode.StartsWith(scopeChildPrefix!))))) &&
+            // 仅本人：只看自己录入的数据
+            (!hasSelfOnly || s.CreatorId == selfId) &&
             (!hasYear || s.AcademicYear == year) &&
             (!hasGrade || s.GradeId == gradeId) &&
             (!hasClass || s.ClassId == classId) &&
