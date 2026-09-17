@@ -9,12 +9,20 @@ import type {
   ChangeFlowTemplate,
   ChangeTodoQuery,
   ChangeType,
+  CodeCategory,
+  CodeItem,
   CreateUpdateChangeType,
+  CreateUpdateOrg,
+  CreateUser,
+  IdentityRole,
+  IdentityUser,
   MissingPhotoQuery,
   MissingPhotoStudent,
   MyProfile,
   OrgDto,
+  OrgTreeNode,
   PagedResult,
+  PermissionResult,
   PhotoCompensationResult,
   PhotoDto,
   PhotoQuery,
@@ -25,7 +33,8 @@ import type {
   StudentListItem,
   StudentQuery,
   SubmitChangeApply,
-  TokenResponse
+  TokenResponse,
+  UpdateUser
 } from './types'
 
 /**
@@ -47,6 +56,17 @@ export const ENDPOINTS = {
 
   org: '/api/app/org',
   orgTree: '/api/app/org/tree',
+
+  /** ABP Identity 自带用户/角色接口（不是我们自己的应用服务） */
+  identityUsers: '/api/identity/users',
+  identityRoles: '/api/identity/roles',
+  identityRolesAll: '/api/identity/roles/all',
+
+  /** ABP PermissionManagement 自带授权接口 */
+  permissions: '/api/permission-management/permissions',
+
+  codeCategories: '/api/app/code/categories',
+  codeItems: '/api/app/code/items',
 
   student: '/api/app/student',
 
@@ -162,8 +182,171 @@ export const profileApi = {
 // ---------------------------------------------------------------------------
 
 export const orgApi = {
+  /** 整棵组织树。**上万所学校时不要用**，优先用 getRoots + getChildren 逐层加载。 */
   async getTree(): Promise<OrgDto[]> {
     const { data } = await http.get<OrgDto[]>(ENDPOINTS.orgTree)
+
+    return data
+  },
+
+  /**
+   * 取根节点（省厅）。
+   *
+   * 为什么不用「parentId 传空」的写法：路由是 `/org/children/{parentId}`，
+   * 空段会变成 404。改用列表接口按类型过滤，语义还更清楚。
+   */
+  async getRoots(): Promise<OrgDto[]> {
+    const { data } = await http.get<OrgDto[]>(ENDPOINTS.org, {
+      params: { orgType: 'Province', onlyEnabled: false }
+    })
+
+    return data
+  },
+
+  /** 逐层加载某个节点的直接下级（大组织树的标准打开方式）。 */
+  async getChildren(parentId: string, onlyEnabled = false): Promise<OrgTreeNode[]> {
+    const { data } = await http.get<OrgTreeNode[]>(`${ENDPOINTS.org}/children/${parentId}`, {
+      params: { onlyEnabled }
+    })
+
+    return data
+  },
+
+  async get(id: string): Promise<OrgDto> {
+    const { data } = await http.get<OrgDto>(`${ENDPOINTS.org}/${id}`)
+
+    return data
+  },
+
+  async create(input: CreateUpdateOrg): Promise<OrgDto> {
+    const { data } = await http.post<OrgDto>(ENDPOINTS.org, input)
+
+    return data
+  },
+
+  async update(id: string, input: CreateUpdateOrg): Promise<OrgDto> {
+    const { data } = await http.put<OrgDto>(`${ENDPOINTS.org}/${id}`, input)
+
+    return data
+  },
+
+  async remove(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.org}/${id}`)
+  },
+
+  /** 移动节点（会级联重写整棵子树的物化路径）。 */
+  async move(id: string, newParentId?: string | null): Promise<void> {
+    await http.post(`${ENDPOINTS.org}/${id}/move`, { newParentId: newParentId ?? null })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 身份：用户与角色（走 ABP Identity 自带接口）
+// ---------------------------------------------------------------------------
+
+export const identityApi = {
+  async getUsers(query: {
+    filter?: string
+    skipCount?: number
+    maxResultCount?: number
+    sorting?: string
+  }): Promise<PagedResult<IdentityUser>> {
+    const { data } = await http.get<PagedResult<IdentityUser>>(ENDPOINTS.identityUsers, {
+      params: query
+    })
+
+    return data
+  },
+
+  async getUser(id: string): Promise<IdentityUser> {
+    const { data } = await http.get<IdentityUser>(`${ENDPOINTS.identityUsers}/${id}`)
+
+    return data
+  },
+
+  /**
+   * 取某个用户的角色。
+   *
+   * **必须用这个接口，不能读 user.roleNames** —— ABP 10 的 IdentityUserDto
+   * （无论列表还是详情）都不包含 roleNames 字段。曾经想当然地读它，
+   * 拿到 undefined → 界面上角色是空的 → 保存时把空数组回写 →
+   * **用户角色被静默清空**。角色是"谁有什么权限"的唯一入口，这类静默丢失很致命。
+   */
+  async getUserRoles(id: string): Promise<IdentityRole[]> {
+    const { data } = await http.get<{ items: IdentityRole[] }>(
+      `${ENDPOINTS.identityUsers}/${id}/roles`
+    )
+
+    return data.items
+  },
+
+  async createUser(input: CreateUser): Promise<IdentityUser> {
+    const { data } = await http.post<IdentityUser>(ENDPOINTS.identityUsers, input)
+
+    return data
+  },
+
+  async updateUser(id: string, input: UpdateUser): Promise<IdentityUser> {
+    const { data } = await http.put<IdentityUser>(`${ENDPOINTS.identityUsers}/${id}`, input)
+
+    return data
+  },
+
+  async deleteUser(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.identityUsers}/${id}`)
+  },
+
+  /** 全部角色（用于角色下拉与用户角色分配）。 */
+  async getRoles(): Promise<IdentityRole[]> {
+    const { data } = await http.get<{ items: IdentityRole[] }>(ENDPOINTS.identityRolesAll)
+
+    return data.items
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 权限分配（走 ABP PermissionManagement 自带接口）
+// ---------------------------------------------------------------------------
+
+export const permissionApi = {
+  /**
+   * 取某个 provider（角色 R / 用户 U）的权限树。
+   *
+   * providerKey：角色传角色名（如 admin），用户传用户 Id。
+   */
+  async get(providerName: 'R' | 'U', providerKey: string): Promise<PermissionResult> {
+    const { data } = await http.get<PermissionResult>(ENDPOINTS.permissions, {
+      params: { providerName, providerKey }
+    })
+
+    return data
+  },
+
+  /** 批量保存。只提交变化过的项，减少无效写入。 */
+  async update(
+    providerName: 'R' | 'U',
+    providerKey: string,
+    permissions: { name: string; isGranted: boolean }[]
+  ): Promise<void> {
+    await http.put(ENDPOINTS.permissions, { permissions }, { params: { providerName, providerKey } })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 微代码
+// ---------------------------------------------------------------------------
+
+export const codeApi = {
+  async getCategories(keyword?: string): Promise<CodeCategory[]> {
+    const { data } = await http.get<CodeCategory[]>(ENDPOINTS.codeCategories, {
+      params: { keyword }
+    })
+
+    return data
+  },
+
+  async getItems(categoryId: string): Promise<CodeItem[]> {
+    const { data } = await http.get<CodeItem[]>(`${ENDPOINTS.codeItems}/${categoryId}`)
 
     return data
   }

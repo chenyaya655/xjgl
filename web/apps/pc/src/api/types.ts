@@ -84,19 +84,22 @@ export const OrgTypes = {
 
 export type OrgType = (typeof OrgTypes)[keyof typeof OrgTypes]
 
+/** 组织节点（含下级；对应后端 OrgDto）。 */
 export interface OrgDto {
   id: string
   parentId?: string | null
   orgType: string
-  orgTypeName?: string | null
+  orgTypeName: string
   code: string
   name: string
   shortName?: string | null
-  pathCode?: string | null
-  level: number
+  /** 物化路径，层级与子树查询都靠它 */
+  pathCode: string
+  treeLevel: number
   sort: number
   isEnabled: boolean
-  children?: OrgDto[]
+  remark?: string | null
+  children: OrgDto[]
 }
 
 // ---------------------------------------------------------------------------
@@ -516,4 +519,166 @@ export interface ChangeApplyQuery extends PagedRequest {
 export interface ChangeTodoQuery extends PagedRequest {
   orgId?: string
   roleCode?: string
+}
+
+// ---------------------------------------------------------------------------
+// 组织（省 / 市 / 县区 / 学校）
+// ---------------------------------------------------------------------------
+
+/** 组织类型的中文名（OrgTypes 常量在文件上方已定义，这里只补显示名）。 */
+export const OrgTypeNames: Record<string, string> = {
+  Province: '省厅',
+  City: '地市',
+  County: '县区',
+  School: '学校'
+}
+
+/** 轻量组织节点，用于逐层懒加载。 */
+export interface OrgTreeNode {
+  id: string
+  parentId?: string | null
+  orgType: string
+  code: string
+  name: string
+  shortName?: string | null
+  pathCode: string
+  treeLevel: number
+  sort: number
+  isEnabled: boolean
+  hasChildren: boolean
+  children: OrgTreeNode[]
+}
+
+export interface CreateUpdateOrg {
+  parentId?: string | null
+  orgType: string
+  code: string
+  name: string
+  shortName?: string | null
+  sort: number
+  isEnabled: boolean
+  remark?: string | null
+}
+
+export interface OrgQuery {
+  orgType?: string
+  parentId?: string
+  keyword?: string
+  onlyEnabled?: boolean
+  includeDescendants?: boolean
+}
+
+// ---------------------------------------------------------------------------
+// 身份（用户 / 角色）—— 走 ABP Identity 自带接口
+// ---------------------------------------------------------------------------
+
+export interface IdentityRole {
+  id: string
+  name: string
+  isDefault: boolean
+  isStatic: boolean
+  isPublic: boolean
+}
+
+export interface IdentityUser {
+  id: string
+  userName: string
+  name?: string | null
+  surname?: string | null
+  email?: string | null
+  emailConfirmed: boolean
+  phoneNumber?: string | null
+  isActive: boolean
+  lockoutEnabled: boolean
+  accessFailedCount: number
+  creationTime: string
+  // ⚠ 这里**故意没有** roleNames：ABP 10 的 IdentityUserDto（列表与详情）都不返回它。
+  //   角色必须调 `GET /api/identity/users/{id}/roles` 子资源获取。
+  //   曾经因为想当然地读 `user.roleNames` 拿到 undefined，
+  //   回写时把角色清空了 —— 见 getUserRoles 的注释。
+}
+
+export interface CreateUser {
+  userName: string
+  name?: string | null
+  surname?: string | null
+  email?: string | null
+  phoneNumber?: string | null
+  password: string
+  isActive: boolean
+  lockoutEnabled: boolean
+  roleNames: string[]
+}
+
+export interface UpdateUser {
+  userName: string
+  name?: string | null
+  surname?: string | null
+  email?: string | null
+  phoneNumber?: string | null
+  isActive: boolean
+  lockoutEnabled: boolean
+  roleNames: string[]
+}
+
+// ---------------------------------------------------------------------------
+// 权限分配 —— 走 ABP PermissionManagement 自带接口
+// ---------------------------------------------------------------------------
+
+export interface PermissionGrantInfo {
+  name: string
+  displayName: string
+  parentName?: string | null
+  isGranted: boolean
+  /** 该权限是否允许在当前 provider（角色/用户）上编辑 */
+  isEditable: boolean
+}
+
+export interface PermissionGroup {
+  name: string
+  displayName: string
+  permissions: PermissionGrantInfo[]
+}
+
+export interface PermissionResult {
+  entityDisplayName: string
+  groups: PermissionGroup[]
+}
+
+/** 授权提供方：R=角色，U=用户 */
+export const PermissionProviders = {
+  Role: 'R',
+  User: 'U'
+} as const
+
+// ---------------------------------------------------------------------------
+// 微代码
+// ---------------------------------------------------------------------------
+
+export interface CodeCategory {
+  id: string
+  code: string
+  name: string
+  stdSource?: string | null
+  isTree: boolean
+  isSystem: boolean
+  isEnabled: boolean
+  cacheable: boolean
+  sort: number
+  remark?: string | null
+  itemCount: number
+}
+
+export interface CodeItem {
+  id: string
+  categoryId: string
+  code: string
+  name: string
+  parentId?: string | null
+  pathCode: string
+  treeLevel: number
+  sort: number
+  isEnabled: boolean
+  stdCode?: string | null
+  remark?: string | null
 }

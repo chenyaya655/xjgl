@@ -43,7 +43,9 @@ namespace Xjgl;
     typeof(AbpAspNetCoreSerilogModule),
     typeof(AbpSwashbuckleModule),
     typeof(AbpCachingStackExchangeRedisModule),
-    typeof(AbpEventBusRabbitMqModule),
+    // ⚠ 这里**故意不注册** AbpEventBusRabbitMqModule —— 原因见 ConfigureEventBus 的注释：
+    //   MQ 不可达时它会让框架表的写入静默回滚（接口返回 200、数据库里却没有）。
+    //   重新接入的前置条件是先实现 Outbox，见「已知技术债」。
     typeof(AbpOpenIddictAspNetCoreModule),
     // 密码模式登录需要 SignInManager / UserManager 的 ASP.NET Core 集成
     typeof(AbpIdentityAspNetCoreModule),
@@ -161,6 +163,50 @@ public class XjglHttpApiHostModule : AbpModule
             // 由下层数据库兜底，而不是把异常抛给用户。
             options.HideErrors = true;
         });
+
+        ConfigureEventBus();
+    }
+
+    /// <summary>
+    /// 事件总线：**当前刻意不接 RabbitMQ**。
+    ///
+    /// 【为什么 —— 一个会造成静默数据丢失的缺陷，有完整证据】
+    ///
+    /// 实测（RabbitMQ 不可达时）：
+    ///   - `POST /api/identity/users` 返回 **200 且带完整用户对象**；
+    ///   - 库里查不到：`AbpUsers` 共 312 行，没有刚建的那个；
+    ///   - 客户端同时收到 `curl: (18) transfer closed with outstanding read data remaining`。
+    ///
+    /// 宿主日志里的堆栈给出了准确链路：
+    /// <code>
+    /// RabbitMqDistributedEventBus.PublishAsync(...)
+    ///   → DistributedEventBusBase.PublishAsync(...)
+    ///   → UnitOfWorkEventPublisher.PublishDistributedEventsAsync(...)
+    ///   → UnitOfWork.CompleteAsync(...)
+    ///   → AbpUnitOfWorkMiddleware.InvokeAsync(HttpContext)
+    /// </code>
+    ///
+    /// 也就是说：ABP 的工作单元是在**响应写出之后**才提交的，
+    /// 而身份模块的用户/角色写操作会发布分布式事件；MQ 发布失败 →
+    /// 工作单元提交失败 → 事务回滚 —— 但 HTTP 响应早已发出去，客户端只看到"成功"。
+    /// **结果是"建用户"这类框架表写入静默丢失，而用户以为成功了。**
+    /// （业务表不受影响：SqlSugar 的写入是即时提交，不挂在 ABP 的工作单元上。）
+    ///
+    /// 【当前取舍】
+    /// 宁可暂时不接 MQ，也不能让写操作静默丢数据。当前代码里没有任何业务逻辑
+    /// 依赖 MQ（照片上传是同步写 + 舱壁/熔断保护），所以移除它不损失功能，
+    /// 反而顺带修掉了"登录要为 MQ 连接超时白等 5~6 秒"的问题。
+    ///
+    /// 【重新接入的前置条件】
+    /// 必须先实现 **Outbox**（方案文档 11.4 / 熔断降级矩阵）：
+    /// 事件与业务数据在同一个事务里落库，由后台任务重发；ABP 10 已内置
+    /// <c>OutboxSender</c> / <c>InboxProcessor</c>（见 Volo.Abp.EventBus.Distributed）。
+    /// 届时把 <c>AbpEventBusRabbitMqModule</c> 加回 DependsOn 并配置 Outbox 存储即可。
+    /// </summary>
+    private static void ConfigureEventBus()
+    {
+        // 暂时没有需要配置的内容。保留这个方法是为了给上面那段说明一个落点，
+        // 也方便将来接 Outbox 时在这里补齐配置。
     }
 
     private void ConfigureConventionalControllers()

@@ -29,6 +29,54 @@
     "Loading": "Loading...",
     "TotalCount": "Total {0} item(s)",
 
+    "Xjgl:00001": "Data not found",
+    "Xjgl:00002": "The record already exists",
+    "Xjgl:00003": "The record is in use and cannot be deleted",
+    "Xjgl:00004": "Validation failed",
+
+    "Xjgl:00100": "Organization not found",
+    "Xjgl:00101": "This organization still has child organizations. Delete the children first.",
+    "Xjgl:00102": "The school code already exists",
+    "Xjgl:00103": "The organization code already exists",
+
+    "Xjgl:00200": "Predefined user not found",
+    "Xjgl:00201": "This account has already been activated",
+    "Xjgl:00202": "The activation code has expired. Please request a new one.",
+    "Xjgl:00203": "Identity information does not match. Please check the name and ID number.",
+    "Xjgl:00204": "This user is outside your data scope",
+
+    "Xjgl:00300": "You cannot grant a permission you do not own",
+    "Xjgl:00301": "The grant scope exceeds your administrative scope",
+    "Xjgl:00302": "You cannot grant permissions to yourself",
+
+    "Xjgl:00400": "Code category not found",
+    "Xjgl:00401": "Code item not found",
+    "Xjgl:00402": "Built-in system code tables cannot be modified",
+
+    "Xjgl:00500": "Student not found",
+    "Xjgl:00501": "Failed to generate the student number. Please try again.",
+    "Xjgl:00502": "An active student record already exists for this ID number",
+    "Xjgl:00503": "This student is in a status-change workflow and cannot be modified",
+
+    "Xjgl:00600": "Change type not found",
+    "Xjgl:00601": "Change application not found",
+    "Xjgl:00602": "No published workflow has been configured for this change type",
+    "Xjgl:00603": "The application window is currently closed",
+    "Xjgl:00604": "This change is not allowed for the student's grade",
+    "Xjgl:00605": "This approval task does not belong to your organization",
+    "Xjgl:00606": "The current status does not allow this operation",
+    "Xjgl:00607": "The workflow version has changed. Please refresh and try again.",
+
+    "Xjgl:00700": "Photo not found",
+    "Xjgl:00701": "Unsupported image format",
+    "Xjgl:00702": "The photo exceeds the size limit",
+    "Xjgl:00703": "Photo storage is temporarily unavailable",
+    "Xjgl:00704": "Too many photos in a single upload",
+
+    "Xjgl:00800": "Invalid import file format",
+    "Xjgl:00801": "The imported data contains invalid rows",
+    "Xjgl:00802": "Export task not found",
+
     "Menu:System": "System",
     "Menu:Organization": "Organization",
     "Menu:Student": "Student",

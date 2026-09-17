@@ -165,10 +165,19 @@ http.interceptors.response.use(
  * 把 axios 错误翻译成能给用户看的一句话。
  *
  * ABP 的错误信封长这样：
- *   { "error": { "code": "...", "message": "...", "details": "...",
+ *   { "error": { "code": "Xjgl:00101", "message": "...", "details": "...",
+ *                "data": { "reason": "..." },
  *                "validationErrors": [{ "message": "...", "members": ["Name"] }] } }
- * 其中 validationErrors 是数据校验失败（用户能自己改），
- * details 往往是业务原因的详细说明，两者优先级都高于 message。
+ *
+ * 取值优先级不是随便定的，每一层都有明确理由：
+ *   1) validationErrors —— 数据校验失败，用户自己能改；
+ *   2) details          —— 业务原因的详细说明；
+ *   3) **data.reason**  —— 我们自己的业务异常用 `.WithData("reason", ...)` 带出的
+ *      动态说明（例如"该组织下还有下级组织，请先删除下级"）。这一层不能省：
+ *      ABP 在错误码没有本地化文案时会把 message 退化成
+ *      "服务器内部错误"，而真正的原因只在 data.reason 里 ——
+ *      只读 message 就会给用户看一句谎话（实测踩过）。
+ *   4) message          —— 最后才用兜底文案。
  */
 export function describeError(error: unknown): string {
   if (!axios.isAxiosError(error)) {
@@ -180,6 +189,7 @@ export function describeError(error: unknown): string {
         error?: {
           message?: string
           details?: string
+          data?: Record<string, unknown>
           validationErrors?: { message?: string; members?: string[] }[]
         }
       }
@@ -196,6 +206,19 @@ export function describeError(error: unknown): string {
 
   if (envelope?.details) {
     return envelope.details
+  }
+
+  // 业务异常自带的动态说明（reason / message 两个约定键）
+  const payload = envelope?.data
+
+  if (payload) {
+    for (const key of ['reason', 'message']) {
+      const value = payload[key]
+
+      if (typeof value === 'string' && value.trim()) {
+        return value
+      }
+    }
   }
 
   if (envelope?.message) {
