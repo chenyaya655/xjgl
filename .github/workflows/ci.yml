@@ -175,3 +175,102 @@ jobs:
       # 并检查字体、健康检查、数据卷、nginx 的深链回落与上传体积等（详见脚本注释）
       - name: 核对部署配置与应用期望是否一致
         run: node tools/verify-deploy.mjs
+
+  e2e:
+    name: 端到端流程测试（Playwright + Chromium）
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: xjgl_test
+          POSTGRES_USER: xjgl
+          POSTGRES_PASSWORD: Xjgl@Dev2026
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xjgl -d xjgl_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DOTNET_VERSION: '10.0.x'
+      # 迁移器与后端 Host 都读这个连接串。
+      # 【为什么必须显式给】appsettings.json 里的默认值是"本机 PostgreSQL 的 xjgl 库"，
+      # 而 CI 里服务容器的库叫 xjgl_test，不给这个变量迁移器就会去连一个不存在的库。
+      ConnectionStrings__Default: "Host=127.0.0.1;Port=5432;Database=xjgl_test;User ID=xjgl;Password=Xjgl@Dev2026;Timeout=30;Command Timeout=120"
+      # Playwright 的配置会用这个连接串启动后端 Host（两者取值相同，语义各自独立）
+      E2E_DB_CONNECTION: "Host=127.0.0.1;Port=5432;Database=xjgl_test;User ID=xjgl;Password=Xjgl@Dev2026;Timeout=30;Command Timeout=120"
+      E2E_DOTNET_CONFIG: Release
+      # 中文字体：打印用例会真的渲染 PDF（缺字形会直接失败，这正是生产环境会遇到的问题）。
+      # appsettings 里的默认字体族是"微软雅黑"（Windows 才有），CI 装的是 Noto，因此在这里覆盖。
+      XJGL_PRINT_FONT: Noto Sans CJK SC
+      Xjgl__Print__DefaultFontFamily: Noto Sans CJK SC
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 缓存 NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: 构建后端
+        run: dotnet build Xjgl.sln -c Release
+
+      - name: 安装中文字体
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      - name: 初始化数据库
+        run: dotnet run --project src/Xjgl.DbMigrator -c Release --no-build
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 启用 corepack
+        run: corepack enable
+
+      - name: 缓存 pnpm 存储
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: 安装前端依赖
+        working-directory: web
+        run: corepack pnpm@9.15.0 install --frozen-lockfile
+
+      - name: 安装 Chromium（含系统依赖）
+        working-directory: web
+        run: corepack pnpm@9.15.0 exec playwright install --with-deps chromium
+
+      # 后端与前端 dev server 都由 Playwright 的 webServer 配置拉起
+      # （后端我这边用 E2E_DB_CONNECTION 指到 CI 的 postgres 服务）
+      - name: 端到端流程测试
+        working-directory: web
+        run: corepack pnpm@9.15.0 exec playwright test --config e2e/playwright.config.ts
+
+      - name: 上传失败现场（截图 / 录屏 / 追踪）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            web/e2e/playwright-report
+            web/e2e/test-results
+          retention-days: 7

@@ -12,6 +12,7 @@ import type {
   PhotoUploadResult
 } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
+import SchoolSelect from '@/components/SchoolSelect.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -590,15 +591,12 @@ onMounted(async () => {
           </template>
 
           <div class="photo-list__toolbar">
-            <el-select
+            <SchoolSelect
               v-model="missingQuery.schoolOrgId"
+              :schools="schools"
               placeholder="全部学校（按权限范围）"
-              clearable
-              filterable
               style="width: 260px"
-            >
-              <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
-            </el-select>
+            />
 
             <el-input
               v-model="missingQuery.keyword"
@@ -696,15 +694,13 @@ onMounted(async () => {
 
       <el-form label-width="80px" class="photo-list__upload-form">
         <el-form-item label="学校">
-          <el-select
+          <SchoolSelect
             v-model="uploadSchoolId"
+            :schools="schools"
             placeholder="请选择学校"
-            filterable
             style="width: 300px"
             @change="uploadRows.length && matchStudents()"
-          >
-            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
+          />
 
           <el-button class="photo-list__pick" :disabled="!uploadSchoolId" @click="pickFiles">
             <AppIcon name="FolderOpened" />

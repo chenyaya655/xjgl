@@ -123,11 +123,20 @@ head -c 5 roster.pdf      # 期望输出 %PDF-
 
 # 4) 日志里**不能**出现「分布式缓存主实现不可用」
 docker compose -f docker-compose.prod.yml logs api | grep -i '缓存主实现不可用' && echo '⚠ Redis 没连上，正在用内存缓存'
+
+# 5) 启动日志里的「内容根」必须是容器里的 /app/api（appsettings.json 就在那里），
+#    并且**不该**出现「内容根下没有 appsettings.json」这条告警
+docker compose -f docker-compose.prod.yml logs api | grep -E '内容根|没有 appsettings.json'
 ```
 
 > 第 4 条很重要：本系统的分布式缓存是「Redis 主 + 内存兜底」的容错装饰器，
 > **配置错了不会报错，只会静默降级成单机缓存**（缓存与限流都不再跨实例共享）。
 > 开发时就踩到过这个坑（`appsettings.json` 里的密码与实际 Redis 不一致，系统安静地跑着内存缓存）。
+>
+> 第 5 条是同一类问题的另一面：ASP.NET Core 默认把 `appsettings.json` 当**可选**文件，
+> 内容根不对时它**不报错**，应用会安静地用代码默认值启动（照片存储路径、打印字体、
+> 学籍号规则一起悄悄换值）。应用已经改成按"程序所在目录"找配置，并把内容根打进启动日志，
+> 这样一眼就能确认配置真的被读到了。
 
 ---
 

@@ -1,0 +1,16 @@
+{
+  "name": "@xjgl/e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "河南省学籍管理系统 —— 端到端流程测试（Playwright）",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

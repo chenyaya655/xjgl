@@ -45,6 +45,13 @@ public class Program
     internal static IHostBuilder CreateHostBuilder(string[] args)
     {
         return Host.CreateDefaultBuilder(args)
+            // 【为什么钉内容根】迁移器是被 CI、部署脚本、VS 从**各自的当前目录**调起来的
+            // （CI 里是仓库根：`dotnet run --project src/Xjgl.DbMigrator`），
+            // 而默认的内容根就是"当前目录"，于是它会在仓库根找 appsettings.json 并直接崩：
+            //   The configuration file 'appsettings.json' was not found ...
+            //   The expected physical path was 'D:\StudentManagement\appsettings.json'
+            // appsettings.json 是随生成复制到输出目录的，所以按"程序所在目录"找才是确定的。
+            .UseContentRoot(AppContext.BaseDirectory)
             .ConfigureAppConfiguration((hostContext, config) =>
             {
                 config

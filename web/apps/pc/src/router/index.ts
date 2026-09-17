@@ -135,6 +135,19 @@ export function registerDynamicRoutes(menus: { code: string; name: string; child
 
 let unauthorizedHandlerRegistered = false
 
+/**
+ * 公开页面（不需要登录）。
+ *
+ * ⚠ **不能用 `to.meta.anonymous` 判断"是不是公开页"**：
+ * 业务路由是登录后才注册的，所以在"还没恢复会话"的那一刻，
+ * `/student/list` 这类路径匹配到的是 **catch-all（404 页）**，而它也带 `anonymous: true` ——
+ * 于是守卫会直接放行，用户看到的是「页面不存在或您没有访问权限」，
+ * 而不是被送到登录页（未登录）或自动恢复会话（已登录后刷新）。
+ *
+ * 这个缺陷是端到端测试（Playwright）抓出来的：集成测试与类型检查都看不到它。
+ */
+const PUBLIC_PATHS = ['/login', '/activate']
+
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
 
@@ -148,20 +161,26 @@ router.beforeEach(async (to) => {
     unauthorizedHandlerRegistered = true
   }
 
-  if (to.meta.anonymous) {
+  // 先尝试恢复会话：动态路由注册之后，业务路径才解析得到
+  if (!auth.isAuthenticated && hasToken()) {
+    const restored = await restoreSession(auth)
+
+    if (restored) {
+      // 路由表变了，重新解析当前目标。
+      //
+      // ⚠ 必须用 fullPath 字符串，**不能写 `{ ...to, replace: true }`**：
+      // `to` 是已解析的路由对象，里面带着 `name: 'not-found'`（此刻它匹配的是 catch-all），
+      // 而 vue-router 里 **name 优先于 path** —— 于是会被导航回 404 页，
+      // 表现就是"刷新业务页面永远停在页面不存在"。这个坑是端到端测试抓出来的。
+      return { path: to.fullPath, replace: true }
+    }
+  }
+
+  if (PUBLIC_PATHS.includes(to.path)) {
     return true
   }
 
   if (!auth.isAuthenticated) {
-    if (!auth.profile && hasToken()) {
-      // 有令牌但内存里没有上下文（刷新页面后的正常情况）：静默恢复会话
-      const restored = await restoreSession(auth)
-
-      if (restored) {
-        return { ...to, replace: true }
-      }
-    }
-
     return { path: '/login', query: { redirect: to.fullPath } }
   }
 

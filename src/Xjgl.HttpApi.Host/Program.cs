@@ -25,7 +25,28 @@ public class Program
         {
             Log.Information("正在启动 Xjgl.HttpApi.Host ...");
 
-            var builder = WebApplication.CreateBuilder(args);
+            // 【为什么把内容根钉在「程序所在目录」而不是当前工作目录】
+            // 容器里是 `WORKDIR /app` + `dotnet /app/api/Xjgl.HttpApi.Host.dll`；
+            // CI 与脚本里是 `dotnet run --project src/Xjgl.HttpApi.Host`（当前目录是仓库根）。
+            // 这两种情况下"当前目录"都不是 appsettings.json 所在目录，而 ASP.NET Core
+            // 默认把 appsettings.json 当**可选**文件 —— 于是应用会**安静地**用代码默认值启动：
+            // 照片存储路径、打印字体、学籍号规则、Redis 连接全都悄悄换了值，日志里一句话都没有。
+            // 这正是本项目一直在防的「静默降级」，所以改为显式指定，并在找不到时报出来。
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                Args = args,
+                ContentRootPath = AppContext.BaseDirectory
+            });
+
+            if (!File.Exists(Path.Combine(builder.Environment.ContentRootPath, "appsettings.json")))
+            {
+                Log.Warning(
+                    "内容根下没有 appsettings.json（{ContentRoot}）：本次只用环境变量与代码默认值，请确认这不是配置漏挂",
+                    builder.Environment.ContentRootPath);
+            }
+
+            Log.Information("内容根：{ContentRoot}", builder.Environment.ContentRootPath);
+
             builder.Host
                 .AddAppSettingsSecretsJson()
                 .UseAutofac()

@@ -11,6 +11,7 @@ import type {
 } from '@/api/types'
 import ChangeApplyDetail from '@/components/ChangeApplyDetail.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import SchoolSelect from '@/components/SchoolSelect.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -405,14 +406,12 @@ onMounted(async () => {
         </el-form-item>
 
         <el-form-item v-if="needTargetSchool" label="目标学校" required>
-          <el-select
+          <SchoolSelect
             v-model="submitForm.targetSchoolOrgId"
+            :schools="schools"
             placeholder="请选择转入学校"
-            filterable
             style="width: 100%"
-          >
-            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
+          />
         </el-form-item>
 
         <el-form-item label="申请理由" required>

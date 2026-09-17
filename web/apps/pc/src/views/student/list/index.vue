@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { orgApi, studentApi, studentImportApi, studentPrintApi, codeApi } from '@xjgl/api'
 import type { ImportColumn, ImportStudentsResult, OrgDto, StudentListItem } from '@xjgl/api'
 import AppIcon from '@/components/AppIcon.vue'
+import SchoolSelect from '@/components/SchoolSelect.vue'
 import StudentProfileDrawer from '@/components/StudentProfileDrawer.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
@@ -184,14 +185,21 @@ async function printRoster(): Promise<void> {
 // 导入导出
 // ---------------------------------------------------------------------------
 
-/** 当前查询条件（导入导出要按同样的条件走，避免"看到的是筛选结果、导出的是全量"）。 */
+/**
+ * 当前查询条件（导出要按同样的条件走，避免"看到的是筛选结果、导出的是全量"）。
+ *
+ * ⚠ **不要传 maxResultCount**：ABP 对单次请求的 MaxResultCount 有硬上限（默认 1000），
+ * 传 5000 会被参数校验直接拒掉（HTTP 400）。
+ * 第一版这里写的就是 5000 —— 表现是"点导出没反应"（前端弹错误提示、不下载），
+ * 而集成测试直接调服务层、绕过了 DTO 校验，所以一直没暴露，直到端到端测试才抓到。
+ * 导出服务内部自己分页累积（每页 1000，上限 5000 行），不需要调用方指定。
+ */
 function currentQuery() {
   return {
     schoolOrgId: query.schoolOrgId,
     keyword: query.keyword || undefined,
     studentStatusCode: query.studentStatusCode,
-    sorting: 'StudentNo ASC',
-    maxResultCount: 5000
+    sorting: 'StudentNo ASC'
   }
 }
 
@@ -303,15 +311,13 @@ onMounted(async () => {
     <el-card shadow="never" class="student-list__filter">
       <el-form :inline="true" @submit.prevent="search">
         <el-form-item label="学校">
-          <el-select
+          <!-- 用虚拟滚动的学校下拉：全省几万所学校，普通 el-select 会渲染几万个 DOM 节点把页面卡死 -->
+          <SchoolSelect
             v-model="query.schoolOrgId"
+            :schools="schools"
             placeholder="全部（按权限范围）"
-            clearable
-            filterable
             style="width: 240px"
-          >
-            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
+          />
         </el-form-item>
 
         <el-form-item label="学籍状态">

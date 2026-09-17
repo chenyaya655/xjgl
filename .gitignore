@@ -61,6 +61,11 @@ unpackage/
 # uni-app / 小程序产物
 web/apps/mp/dist/
 web/apps/mp/unpackage/
+# Playwright 端到端测试产物（失败截图、trace、HTML 报告都可能上百 MB，绝不入库）
+web/e2e/playwright-report/
+web/e2e/test-results/
+web/e2e/blob-report/
+web/e2e/.playwright/
 
 ## ---- 密钥与连接串（政务项目：绝不入库）----
 appsettings.Secrets.json

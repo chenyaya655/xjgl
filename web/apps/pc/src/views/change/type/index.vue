@@ -20,6 +20,7 @@ import {
   ChangeOrgResolverNames
 } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
+import SchoolSelect from '@/components/SchoolSelect.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -668,25 +669,20 @@ onMounted(async () => {
 
         <el-space wrap>
           <span>转出学校：</span>
-          <el-select
+          <SchoolSelect
             v-model="previewForm.sourceSchoolOrgId"
+            :schools="schools"
             placeholder="（本校转出可留空）"
-            clearable
-            filterable
             style="width: 260px"
-          >
-            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
+          />
 
           <span>转入学校：</span>
-          <el-select
+          <SchoolSelect
             v-model="previewForm.targetSchoolOrgId"
+            :schools="schools"
             placeholder="请选择"
-            filterable
             style="width: 260px"
-          >
-            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
-          </el-select>
+          />
 
           <el-button type="primary" plain :loading="previewing" @click="runPreview">预览</el-button>
         </el-space>

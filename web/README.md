@@ -38,7 +38,20 @@ corepack pnpm@9.15.0 --filter @xjgl/h5 dev     # H5 端 http://127.0.0.1:5174
 # 3) 生产构建 + 类型检查（`-r` 表示所有工作区项目）
 corepack pnpm@9.15.0 -r typecheck
 corepack pnpm@9.15.0 -r build
+
+# 4) 端到端测试（Playwright，会自动拉起后端与 PC 端 dev server）
+corepack pnpm@9.15.0 exec playwright install chromium   # 首次需要
+corepack pnpm@9.15.0 test:e2e                            # 全套约 1 分钟
+corepack pnpm@9.15.0 test:e2e:headed                     # 看着它点，排查用
 ```
+
+> **端到端测试（`e2e/`）为什么值得单独一层**：集成测试直接调应用服务，
+> 它证明不了"前端有没有按真实路径与动词调接口""按钮在权限与路由下是否真的可点"
+> "页面在真实数据量下还活着吗"。本项目第一次跑通 E2E 就抓出三个集成测试与类型检查
+> 都看不见的缺陷（刷新深链 404、导出按钮 400、学校下拉把 6,789 所学校全渲染成 DOM
+> 导致页面假死 100 秒）。用例里刻意留了一条**与数据量无关**的守卫：
+> 下拉选项的 DOM 节点数必须少于 200（即"必须走虚拟滚动"）。
+> 详见 `e2e/playwright.config.ts` 与 `e2e/specs/support/auth.ts` 的注释。
 
 > 在 CI 或脚本里跑安装时注意：`pnpm install` 在检测到 `node_modules` 结构不一致时会**交互式询问**
 > 是否重建，非交互环境下会直接退出且**什么都不装**。加 `CI=true` 让它自动确认；
@@ -140,7 +153,8 @@ public/fonts/PlangothicP2-Regular.woff2   # 扩展 G/H/I
 
 ## 下一步
 
-- `packages/shared`：把 API 类型与请求封装抽出来，供 H5 与小程序复用
+- `packages/shared`：把 API 类型与请求封装抽出来，供 H5 与小程序复用（已完成大半，见 `packages/api`）
 - `apps/h5`：手机端（教师用，主要场景是异动审核与拍照上传）
 - `apps/mp`：微信小程序（自定义授权类型 `urn:wechat:miniprogram`）
-- Playwright 端到端用例（登录 → 学生列表 → 异动审批 → 照片上传）
+- ~~Playwright 端到端用例~~ **已补上**（`e2e/`，27 个用例，约 1 分钟跑完）；
+  还没覆盖的是 **H5 端**、**非 Chromium 内核**与 **6 张学生子表的界面增删改**

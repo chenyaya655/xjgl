@@ -11,9 +11,15 @@
     "build:h5": "pnpm --filter @xjgl/h5 build",
     "build:all": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "preview": "pnpm --filter @xjgl/pc preview"
+    "preview": "pnpm --filter @xjgl/pc preview",
+    "test:e2e": "playwright test --config e2e/playwright.config.ts",
+    "test:e2e:headed": "playwright test --config e2e/playwright.config.ts --headed",
+    "test:e2e:report": "playwright show-report e2e/playwright-report"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }
