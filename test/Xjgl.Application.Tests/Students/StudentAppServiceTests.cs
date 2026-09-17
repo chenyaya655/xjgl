@@ -43,25 +43,10 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
         });
     }
 
-    /// <summary>生成一个校验位正确的随机身份证号。</summary>
-    private static string NewIdCard(int birthYear = 2015)
-    {
-        var area = "410102";
-        var birth = $"{birthYear}{Random.Shared.Next(1, 13):D2}{Random.Shared.Next(1, 28):D2}";
-        var seq = Random.Shared.Next(100, 999).ToString("D3");
-
-        var first17 = area + birth + seq;
-        var weights = new[] { 7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2 };
-        const string checkCodes = "10X98765432";
-
-        var sum = 0;
-        for (var i = 0; i < 17; i++)
-        {
-            sum += (first17[i] - '0') * weights[i];
-        }
-
-        return first17 + checkCodes[sum % 11];
-    }
+    // 身份证号统一用基类的 NewUniqueIdCard()（计数器推导，跨轮几乎不重复）。
+    // 本文件早期自带了一个"固定地区码 + 3 位随机顺序码"的生成器，号段只有 899 个，
+    // 测试库跑过若干轮之后会随机撞上历史学生 —— 查重用例的首个 CreateAsync 会直接抛
+    // DuplicateIdCard，表现为用例偶发变红。生成器已在基类里统一。
 
     private async Task<StudentDto> CreateStudentAsync(
         Guid schoolId,
@@ -71,19 +56,25 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
         Guid? gradeId = null,
         Guid? classId = null)
     {
-        return await _studentAppService.CreateAsync(new CreateUpdateStudentDto
+        CreateUpdateStudentDto Build(string? card) => new()
         {
             Name = name,
             GenderCode = "1",
             BirthDate = birthDate ?? new DateTime(2015, 6, 1),
             IdCardTypeCode = "1",
-            IdCardNumber = idCard ?? NewIdCard(),
+            IdCardNumber = card ?? NewUniqueIdCard(),
             SchoolOrgId = schoolId,
             AcademicYear = Year,
             GradeId = gradeId,
             ClassId = classId,
             StudentStatusCode = StudentStatuses.Studying
-        });
+        };
+
+        // 显式传入身份证号的用例（查重、加密存储）必须原样使用，不能换号重试；
+        // 自动生成的号则允许撞号后重试
+        return idCard != null
+            ? await _studentAppService.CreateAsync(Build(idCard))
+            : await RetryOnDuplicateIdCardAsync(() => _studentAppService.CreateAsync(Build(null)));
     }
 
     // ------------------------------------------------------------------
@@ -147,7 +138,7 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
     {
         var schoolA = await CreateSchoolAsync();
         var schoolB = await CreateSchoolAsync();
-        var idCard = NewIdCard();
+        var idCard = NewUniqueIdCard();
 
         await CreateStudentAsync(schoolA.Id, "张三", idCard);
 
@@ -164,7 +155,7 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
     {
         var schoolA = await CreateSchoolAsync();
         var schoolB = await CreateSchoolAsync();
-        var idCard = NewIdCard();
+        var idCard = NewUniqueIdCard();
         var birthDate = new DateTime(2015, 6, 1);
 
         var existing = await CreateStudentAsync(schoolA.Id, "李四", idCard, birthDate);
@@ -185,7 +176,7 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
     public async Task 重复学籍检测_排除自己后不报重复()
     {
         var school = await CreateSchoolAsync();
-        var idCard = NewIdCard();
+        var idCard = NewUniqueIdCard();
         var student = await CreateStudentAsync(school.Id, "王五", idCard);
 
         var result = await _studentAppService.CheckDuplicateAsync(new CheckStudentDuplicateDto
@@ -269,7 +260,7 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
     public async Task 身份证号在返回时脱敏_保留前6后4()
     {
         var school = await CreateSchoolAsync();
-        var idCard = NewIdCard();
+        var idCard = NewUniqueIdCard();
 
         var student = await CreateStudentAsync(school.Id, "周八", idCard);
 
@@ -421,7 +412,7 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
             GenderCode = "2",
             BirthDate = student.BirthDate,
             IdCardTypeCode = "1",
-            IdCardNumber = NewIdCard(),
+            IdCardNumber = NewUniqueIdCard(),
             SchoolOrgId = school.Id,
             AcademicYear = Year,
             HouseholdAddress = "河南省郑州市金水区某某路 1 号",

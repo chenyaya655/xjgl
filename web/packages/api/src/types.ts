@@ -115,7 +115,9 @@ export interface StudentListItem {
   genderCode: string
   genderName?: string | null
   birthDate: string
-  idCardMasked?: string | null
+  age: number
+  /** 脱敏后的身份证号（后端字段名是 MaskedIdCard） */
+  maskedIdCard?: string | null
   schoolOrgId: string
   schoolName?: string | null
   academicYear: string
@@ -125,18 +127,52 @@ export interface StudentListItem {
   className?: string | null
   studentStatusCode: string
   studentStatusName?: string | null
-  photoPath?: string | null
+  /**
+   * 是否已有照片（后端给的是布尔值 HasPhoto，**不是**照片路径）。
+   *
+   * 这里曾写成 `photoPath`，于是学生列表的"照片"列永远显示"缺失" ——
+   * 类型定义与实际返回值不一致的表现就是这样：界面静默显示错误信息，
+   * 不报错、也不崩，只能靠对照后端 DTO 才能发现。
+   */
+  hasPhoto: boolean
   hasRareCharacter: boolean
 }
 
 export interface StudentQuery extends PagedRequest {
   schoolOrgId?: string
+  includeDescendantOrgs?: boolean
   academicYear?: string
   gradeId?: string
   classId?: string
   studentStatusCode?: string
   genderCode?: string
   keyword?: string
+}
+
+// ---------------------------------------------------------------------------
+// 学生批量导入导出
+// ---------------------------------------------------------------------------
+
+export interface ImportColumn {
+  name: string
+  required: boolean
+  remark?: string | null
+}
+
+export interface ImportStudentError {
+  /** CSV 行号（与用户在 Excel 里看到的行号一致） */
+  rowIndex: number
+  name?: string | null
+  idCardNumber?: string | null
+  message: string
+}
+
+export interface ImportStudentsResult {
+  total: number
+  succeeded: number
+  failed: number
+  errors: ImportStudentError[]
+  message: string
 }
 
 // ---------------------------------------------------------------------------

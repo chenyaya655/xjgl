@@ -95,3 +95,6 @@ $RECYCLE.BIN/
 .DS_Store
 *.swp
 *~
+
+## ---- 本地/CI 生成的 swagger 文档快照（供 tools/audit-routes.mjs 核对用）----
+/swagger.json

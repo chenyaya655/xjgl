@@ -95,38 +95,22 @@ public class PhotoAppServiceTests : XjglIntegrationTestBase
         });
     }
 
-    private static string NewIdCard()
-    {
-        var area = "410103";
-        var birth = $"2015{Random.Shared.Next(1, 13):D2}{Random.Shared.Next(1, 28):D2}";
-        var seq = Random.Shared.Next(100, 999).ToString("D3");
-
-        var first17 = area + birth + seq;
-        var weights = new[] { 7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2 };
-        const string checkCodes = "10X98765432";
-
-        var sum = 0;
-        for (var i = 0; i < 17; i++)
-        {
-            sum += (first17[i] - '0') * weights[i];
-        }
-
-        return first17 + checkCodes[sum % 11];
-    }
-
     private async Task<StudentDto> CreateStudentAsync(Guid schoolId, string name = "照片学生")
     {
-        return await _studentAppService.CreateAsync(new CreateUpdateStudentDto
-        {
-            Name = name,
-            GenderCode = "1",
-            BirthDate = new DateTime(2015, 6, 1),
-            IdCardTypeCode = "1",
-            IdCardNumber = NewIdCard(),
-            SchoolOrgId = schoolId,
-            AcademicYear = Year,
-            StudentStatusCode = StudentStatuses.Studying
-        });
+        // 身份证号由基类按计数器生成（跨轮几乎不重复），并在此处自动重试兜底：
+        // 测试库是长期累积的，撞上历史学生会让用例**偶发**变红（详见基类里的说明）
+        return await RetryOnDuplicateIdCardAsync(() =>
+            _studentAppService.CreateAsync(new CreateUpdateStudentDto
+            {
+                Name = name,
+                GenderCode = "1",
+                BirthDate = new DateTime(2015, 6, 1),
+                IdCardTypeCode = "1",
+                IdCardNumber = NewUniqueIdCard(),
+                SchoolOrgId = schoolId,
+                AcademicYear = Year,
+                StudentStatusCode = StudentStatuses.Studying
+            }));
     }
 
     private static byte[] JpegBytes(int size = 512, int seed = 0)

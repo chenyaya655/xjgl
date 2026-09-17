@@ -25,6 +25,8 @@ import type {
   IdentityRole,
   IdentityUser,
   ImportPredefineResult,
+  ImportColumn,
+  ImportStudentsResult,
   MissingPhotoQuery,
   MissingPhotoStudent,
   ModuleAction,
@@ -71,6 +73,8 @@ export * from './types'
  *     - 方法名去掉动词前缀后的剩余部分才作为路径段，
  *       所以 `GetTypesAsync` → `/types`、`GetApplyAsync(id)` → `/{id}/apply`；
  *     - `DeleteManyAsync` → `/many`，**不是** `/delete-many`（我第一版就猜错了）；
+ *     - 路径对了动词还可能错：不以 `Get*` 开头的方法默认是 POST，
+ *       所以「导出」「批量删除」这类方法的动词必须回 swagger 核对（已踩过 405）；
  *     - 光看代码猜路径风险很高，而且猜错的表现可能是 405 而不是 404，更难定位。
  */
 export const ENDPOINTS = {
@@ -95,6 +99,7 @@ export const ENDPOINTS = {
   userProvision: '/api/app/user-provision',
 
   student: '/api/app/student',
+  studentImport: '/api/app/student-import-export',
 
   photo: '/api/app/photo',
   photoMissingList: '/api/app/photo/missing-photo-list',
@@ -577,6 +582,47 @@ export const studentApi = {
 }
 
 // ---------------------------------------------------------------------------
+// 学生批量导入导出
+// ---------------------------------------------------------------------------
+
+export const studentImportApi = {
+  /** 导入模板（CSV 文本，含表头与一行示例）。 */
+  async getTemplate(): Promise<string> {
+    const { data } = await http.get<string>(`${ENDPOINTS.studentImport}/import-template`)
+
+    return data
+  },
+
+  /** 列说明（前端做字段提示用）。 */
+  async getColumns(): Promise<ImportColumn[]> {
+    const { data } = await http.get<ImportColumn[]>(`${ENDPOINTS.studentImport}/columns`)
+
+    return data
+  },
+
+  /**
+   * 批量导入。
+   *
+   * 逐行容错：返回成功数与**每一行的失败原因**，因此前端必须把错误明细展示出来 ——
+   * 只告诉用户"导入失败"等于让他拿着几百行数据自己找问题。
+   */
+  async import(content: string): Promise<ImportStudentsResult> {
+    const { data } = await http.post<ImportStudentsResult>(`${ENDPOINTS.studentImport}/import`, {
+      content
+    })
+
+    return data
+  },
+
+  /** 按查询条件导出（受数据范围约束），返回带 BOM 的 CSV 文本。 */
+  async export(query: StudentQuery): Promise<string> {
+    const { data } = await http.get<string>(`${ENDPOINTS.studentImport}/export`, { params: query })
+
+    return data
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 照片
 // ---------------------------------------------------------------------------
 
@@ -610,8 +656,16 @@ export const photoApi = {
     return data
   },
 
+  /**
+   * 批量删除照片。
+   *
+   * ⚠ 动词必须是 DELETE：后端 `DeleteManyAsync` 被 ABP 约定注册成
+   * `DELETE /api/app/photo/many`（集合参数走请求体）。原先这里写的 `http.post`
+   * 在运行时会直接 405 —— 而这只有真的发一次请求才会暴露，
+   * 因此仓库里保留了 `.tools/audit-routes.mjs` 做全量核对。
+   */
   async deleteMany(ids: string[]): Promise<number> {
-    const { data } = await http.post<number>(ENDPOINTS.photoDeleteMany, ids)
+    const { data } = await http.delete<number>(ENDPOINTS.photoDeleteMany, { data: ids })
 
     return data
   },

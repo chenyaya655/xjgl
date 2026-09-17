@@ -78,23 +78,32 @@ jobs:
       # 这一条是为了守住一个真实踩过的缺陷：某个接口的参数元数据无法被 SwaggerGen
       # 处理时，**整个 swagger.json 会生成失败（500）**，所有接口的文档一起消失，
       # 而接口本身调用完全正常 —— 只有真的去请求一次才会发现。
-      - name: Swagger 冒烟（swagger.json 必须能生成）
+      #
+      # 顺带用生成出来的真实路由表核对前端每次调用的路径与动词：
+      # ABP 按方法名前缀决定 HTTP 动词（不以 Get* 开头的一律 POST），
+      # 「导出」「批量删除」这类接口很容易前后端动词对不上，线上表现是 405 而不是 404，
+      # 进程内单元测试完全发现不了。详见 tools/audit-routes.mjs 顶部的说明。
+      - name: Swagger 冒烟 + 前端路由核对
         env:
           ASPNETCORE_ENVIRONMENT: Development
           ASPNETCORE_URLS: http://127.0.0.1:44300
         run: |
           dotnet run --project src/Xjgl.HttpApi.Host -c Release --no-build &
+          code=000
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:44300/swagger/v1/swagger.json || true)
+            code=$(curl -s -o swagger.json -w "%{http_code}" http://127.0.0.1:44300/swagger/v1/swagger.json || true)
             if [ "$code" = "200" ]; then
               echo "✅ swagger.json 生成成功"
-              exit 0
+              break
             fi
             sleep 2
           done
-          echo "❌ swagger.json 未能生成（最后一次 HTTP $code）"
-          echo "常见原因：[FromForm] 用在了 IFormFile 上，或存在路由冲突导致 SwaggerGen 抛异常。"
-          exit 1
+          if [ "$code" != "200" ]; then
+            echo "❌ swagger.json 未能生成（最后一次 HTTP $code）"
+            echo "常见原因：[FromForm] 用在了 IFormFile 上，或存在路由冲突导致 SwaggerGen 抛异常。"
+            exit 1
+          fi
+          node tools/audit-routes.mjs swagger.json
 
   frontend:
     name: 前端（类型检查 / 生产构建）

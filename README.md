@@ -128,15 +128,18 @@ corepack pnpm@9.15.0 --filter @xjgl/pc dev     # http://127.0.0.1:5173
 ## 测试
 
 ```bash
-# 单元测试：129 个，不依赖数据库（停掉容器也全绿）
+# 单元测试：156 个，不依赖数据库（停掉容器也全绿）
 dotnet run --project test/Xjgl.Domain.Tests
 
-# 集成测试：141 个，打真实 PostgreSQL
+# 集成测试：160 个，打真实 PostgreSQL
 dotnet run --project test/Xjgl.Application.Tests
 
 # 前端类型检查与构建
 corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
 corepack pnpm@9.15.0 --filter @xjgl/pc run build
+
+# 核对前端每次调用的路径与动词是否与后端一致（需要后端已启动，或传入 swagger.json）
+node tools/audit-routes.mjs http://127.0.0.1:44300/swagger/v1/swagger.json
 ```
 
 > **为什么用 `dotnet run --project` 而不是 `dotnet test`**：测试项目是
