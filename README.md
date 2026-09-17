@@ -50,7 +50,7 @@
 | 照片管理：NAS 主存储 + 本地降级、熔断、SHA256 秒传、批量上传、台账、缺照片名单、补偿回放、存储健康度、**缩略图（ImageSharp）与取图接口（ETag + 304）**、**打包导出（zip + 清单）**、**令牌桶限流** | 除 MQ 削峰外已完成（削峰需先做 Outbox） |
 | 前端 PC 端：登录、动态路由与菜单、工作台、学生列表、照片管理、异动三页、模块占位页 | 已完成 |
 | H5 / 微信小程序 / 教育系统内 SSO（授权码模式） | 待做 |
-| 报表与大屏、压测调优、生产部署编排 | 待做 |
+| 报表与大屏、压测调优、K8s 编排 | 待做 |
 
 ---
 
@@ -88,6 +88,10 @@ docker compose -f docker-compose.dev.yml ps     # 三个服务都应为 healthy
 
 包含 PostgreSQL 16（`5432`）、Redis 7（`6379`）、RabbitMQ 3.13（`5672` / 管理台 `15672`）、
 Adminer（`8080`）、Seq（`5341`）。数据在命名卷里，`down` 不会丢，**`down -v` 会清空**。
+
+> **生产部署**（Linux + Docker）另有一套编排与逐步手册：见 [`deploy/README.md`](deploy/README.md)。
+> 其中包含了 NAS 挂载、生僻字字体放置、HTTPS、备份与第三方许可证说明。
+> 部署文件的一致性由 `node tools/verify-deploy.mjs` 与 CI 的 `docker compose config` 双重把关。
 
 ### 2. 初始化数据库
 
@@ -189,7 +193,8 @@ test/
   Xjgl.Application.Tests/      集成测试（真实 PostgreSQL）
 web/
   apps/pc/                     PC 管理端（Vue 3 + Element Plus）
-deploy/                        WSL2 + Docker 开发环境编排与初始化脚本
+deploy/                        开发（WSL2）与生产（Linux + Docker）编排、Dockerfile、nginx 配置、部署手册
+tools/                         开发辅助脚本（前端路由核对、部署一致性核对、NuGet 代理）
 docs/                          设计与交付文档（学习文档单独交付，不在仓库内）
 ```
 

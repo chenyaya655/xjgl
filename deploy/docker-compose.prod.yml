@@ -1,0 +1,212 @@
+# 河南省学籍管理系统 —— 生产编排（Linux + Docker）
+#
+# 用法见 deploy/README.md。核心约定：
+#   - 所有口令与地址都从 .env 注入（本文件里**不写任何默认口令**）：
+#     `${VAR:?message}` 的写法会在变量缺失时直接报错，而不是以空值启动后到处报连接失败。
+#   - api 的健康检查用 /health（进程 + 数据库）；Redis 不可用**不算不健康** ——
+#     本系统在 Redis 故障时会降级到内存缓存，把它算作不健康会让整个站点被摘掉。
+#   - 降级照片目录挂在命名卷上：NAS 熔断期间暂存的照片不能因为重建容器而丢。
+
+name: xjgl
+
+services:
+  # ---------------------------------------------------------------------------
+  # 数据库（框架表 + 业务表同库）
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: xjgl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?请在 .env 中设置 POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?请在 .env 中设置 POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      # 中文与生僻字排序依赖 ICU，因此初始化时就固定编码与排序规则
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=1000
+      - -c
+      - timezone=${TZ:-Asia/Shanghai}
+    volumes:
+      - xjgl-pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Redis：缓存 + 令牌桶限流的桶状态
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: xjgl-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-512mb}
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - xjgl-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # API（含 DbMigrator，用同一镜像跑迁移）
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    image: xjgl/api:latest
+    container_name: xjgl-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB};User ID=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};Timeout=30;Command Timeout=120"
+      Redis__Configuration: "redis:6379,password=${REDIS_PASSWORD},abortConnect=false"
+
+      # 对外地址：影响令牌签发者（Authority）、CORS 与 OpenIddict 客户端回调
+      App__SelfUrl: ${APP_SELF_URL:?请在 .env 中设置 APP_SELF_URL}
+      App__ClientUrl: ${APP_CLIENT_URL:?请在 .env 中设置 APP_CLIENT_URL}
+      App__CorsOrigins: ${APP_CORS_ORIGINS:?请在 .env 中设置 APP_CORS_ORIGINS}
+      AuthServer__Authority: ${APP_SELF_URL}
+      AuthServer__RequireHttpsMetadata: "true"
+      OpenIddict__Applications__Xjgl_App__RootUrl: ${APP_CLIENT_URL}
+      OpenIddict__Applications__Xjgl_Swagger__RootUrl: ${APP_SELF_URL}
+
+      # 照片：NAS 是宿主机的挂载点，以**同路径**绑进容器（SMB/NFS 不要跨容器挂，性能与稳定性都差）
+      Xjgl__Photo__NasRoot: ${NAS_ROOT:-/mnt/nas/xjgl}
+      Xjgl__Photo__FallbackRoot: /data/photo-fallback
+      Xjgl__Photo__CompensationEnabled: "true"
+
+      # 打印：字体族与生僻字目录（镜像里已装 fonts-noto-cjk）
+      Xjgl__Print__DefaultFontFamily: ${PRINT_FONT_FAMILY:-Noto Sans CJK SC}
+      Xjgl__Print__RareCharacterFontDirectory: /app/fonts/rare
+
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # NAS 挂载点（同名路径进容器，容器里看到的路径与宿主机一致，便于排查）
+      - ${NAS_ROOT:-/mnt/nas/xjgl}:${NAS_ROOT:-/mnt/nas/xjgl}
+      # 生僻字字体（宿主机目录 → 容器只读）
+      - ${RARE_FONT_DIR:-./fonts/rare}:/app/fonts/rare:ro
+      # 降级照片暂存区：必须持久化，否则重建容器就丢了"待补偿"的照片
+      - xjgl-photofallback:/data/photo-fallback
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # PC 端（nginx 托管静态资源 + 反代 API）
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    image: xjgl/web:latest
+    container_name: xjgl-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8081}:80"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+
+  # ---------------------------------------------------------------------------
+  # 一次性任务：初始化/升级数据库（迁移 + 种子，幂等）
+  #   docker compose -f docker-compose.prod.yml run --rm migrate
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: xjgl/api:latest
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB};User ID=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};Timeout=30;Command Timeout=120"
+      TZ: ${TZ:-Asia/Shanghai}
+    command: ["dotnet", "/app/migrator/Xjgl.DbMigrator.dll"]
+
+  # ---------------------------------------------------------------------------
+  # 可选：结构化日志（profile=observability）
+  #   docker compose -f docker-compose.prod.yml --profile observability up -d
+  # ---------------------------------------------------------------------------
+  seq:
+    image: datalust/seq:latest
+    container_name: xjgl-seq
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_ADMINPASSWORD: ${SEQ_ADMIN_PASSWORD:?请在 .env 中设置 SEQ_ADMIN_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${SEQ_PORT:-5341}:80"
+    volumes:
+      - xjgl-seqdata:/data
+
+  # ---------------------------------------------------------------------------
+  # 可选：消息队列（profile=mq）
+  #
+  # ⚠ 当前版本**没有注册** AbpEventBusRabbitMqModule（见方案文档技术债第 4 条：
+  #   在实现 Outbox 之前，MQ 不可达会导致框架表写入静默回滚）。
+  #   这个 profile 是给"接入 Outbox 之后"准备的，现在起来也不会被使用。
+  # ---------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: xjgl-rabbitmq
+    profiles: ["mq"]
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-xjgl}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?请在 .env 中设置 RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-xjgl}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - xjgl-rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  xjgl-pgdata:
+  xjgl-redisdata:
+  xjgl-photofallback:
+  xjgl-seqdata:
+  xjgl-rabbitmqdata:

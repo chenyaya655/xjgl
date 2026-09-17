@@ -151,3 +151,27 @@ jobs:
 
       - name: 生产构建
         run: corepack pnpm@9.15.0 --filter @xjgl/pc run build
+
+  deploy:
+    name: 部署编排（语法 + 与应用配置的一致性）
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 用 docker 自己的解析器校验 compose 的语法与变量插值：
+      # `${VAR:?提示}` 这类写法只有真解析一遍才知道变量齐不齐
+      - name: 校验 compose 语法与变量插值
+        run: |
+          cp deploy/.env.example deploy/.env
+          docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env config -q
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 以 appsettings.json 为事实来源，核对 compose 是否提供了应用需要的全部环境变量，
+      # 并检查字体、健康检查、数据卷、nginx 的深链回落与上传体积等（详见脚本注释）
+      - name: 核对部署配置与应用期望是否一致
+        run: node tools/verify-deploy.mjs

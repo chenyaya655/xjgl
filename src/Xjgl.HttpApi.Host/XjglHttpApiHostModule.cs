@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Caching.Distributed;
@@ -383,6 +384,14 @@ public class XjglHttpApiHostModule : AbpModule
         var app = context.GetApplicationBuilder();
         var env = context.GetEnvironment();
 
+        // ⚠ 健康检查必须挂在**管道最前面**，而不是与其它端点一起挂在最后。
+        //
+        // 实测踩过：数据库不可达时，ABP 的请求本地化中间件会去读"租户设置"（要连数据库），
+        // 于是它在管道中途就抛 500 —— 探针根本走不到我们写的端点，
+        // 拿到的是一页异常堆栈，而不是"503 数据库不可用"。
+        // 一个只会返回 200/500 的探针是没有意义的（容器与负载均衡都据此判断是否放流量）。
+        MapHealthEndpoint(app);
+
         if (env.IsDevelopment())
         {
             app.UseDeveloperExceptionPage();
@@ -426,5 +435,65 @@ public class XjglHttpApiHostModule : AbpModule
         app.UseAuditing();
         app.UseAbpSerilogEnrichers();
         app.UseConfiguredEndpoints();
+    }
+
+    /// <summary>
+    /// 健康检查端点（匿名，**终止式中间件**）。
+    ///
+    /// 【为什么必须自己加一个】
+    /// 生产编排里 `depends_on: condition: service_healthy` 与容器 healthcheck 都要有个能探的地址。
+    /// 而本系统的接口**全都要求令牌**：拿一个需要鉴权的接口当探针，
+    /// 只能靠"返回 401 也算活着"这种脆弱约定。因此给一个明确语义的端点：
+    ///   - 200：进程活着 **且数据库连得上**；
+    ///   - 503：数据库连不上（此时实例不该被放进负载均衡）。
+    ///
+    /// 【为什么用裸中间件而不是 MapGet】
+    /// 端点路由在 ABP 的一整套中间件之后；而数据库不可用时，前序的请求本地化中间件
+    /// 自己就会抛 500，探针永远拿不到我们的 503（实测踩过，见 OnApplicationInitialization 注释）。
+    /// 裸中间件能在管道最前面把 /health 拦下来，与数据库状态无关地给出确定答案。
+    ///
+    /// 注意这里**刻意不检查 Redis**：Redis 不可用是本系统设计上允许的降级
+    /// （缓存与限流都会退到内存），把它算作"不健康"会让整个站点被摘掉 ——
+    /// 那是把"部分降级"升级成了"全站不可用"。
+    /// </summary>
+    private static void MapHealthEndpoint(IApplicationBuilder app)
+    {
+        app.Use(async (context, next) =>
+        {
+            if (!HttpMethods.IsGet(context.Request.Method)
+                || !context.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+            {
+                await next();
+                return;
+            }
+
+            var databaseOk = false;
+
+            try
+            {
+                var db = context.RequestServices.GetRequiredService<XjglDbContext>();
+
+                databaseOk = await db.Database.CanConnectAsync(context.RequestAborted);
+            }
+            catch (Exception)
+            {
+                // 连不上就是"不健康"，这里不需要把异常抛出去 ——
+                // 探针的语义是"能不能服务"，不是"为什么不能"
+                databaseOk = false;
+            }
+
+            context.Response.StatusCode = databaseOk
+                ? StatusCodes.Status200OK
+                : StatusCodes.Status503ServiceUnavailable;
+
+            await context.Response.WriteAsJsonAsync(
+                new
+                {
+                    status = databaseOk ? "ok" : "degraded",
+                    database = databaseOk ? "up" : "down",
+                    time = DateTime.UtcNow
+                },
+                context.RequestAborted);
+        });
     }
 }
