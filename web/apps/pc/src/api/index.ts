@@ -2,6 +2,8 @@ import axios from 'axios'
 
 import { CLIENT_ID, http, SCOPE, TOKEN_ENDPOINT, tokenStorage } from './http'
 import type {
+  ActivateUser,
+  ActivateUserResult,
   ChangeApply,
   ChangeApplyListItem,
   ChangeApplyQuery,
@@ -11,6 +13,7 @@ import type {
   ChangeType,
   CodeCategory,
   CodeItem,
+  CreatePredefineUser,
   CreateUpdateChangeType,
   CreateUpdateCodeCategory,
   CreateUpdateCodeItem,
@@ -21,6 +24,7 @@ import type {
   CreateUser,
   IdentityRole,
   IdentityUser,
+  ImportPredefineResult,
   MissingPhotoQuery,
   MissingPhotoStudent,
   ModuleAction,
@@ -28,6 +32,8 @@ import type {
   OrgDto,
   OrgTreeNode,
   PagedResult,
+  PredefineUser,
+  PredefineUserQuery,
   PermissionResult,
   PhotoCompensationResult,
   PhotoDto,
@@ -78,6 +84,7 @@ export const ENDPOINTS = {
   codeItems: '/api/app/code/items',
 
   module: '/api/app/module',
+  userProvision: '/api/app/user-provision',
 
   student: '/api/app/student',
 
@@ -470,6 +477,80 @@ export const moduleApi = {
   /** 手工刷新元数据缓存（写操作已自动失效，这里给一个兜底入口）。 */
   async refreshCache(): Promise<void> {
     await http.post(`${ENDPOINTS.module}/refresh-cache`, {})
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 用户预置与激活
+// ---------------------------------------------------------------------------
+
+export const provisionApi = {
+  async getList(query: PredefineUserQuery): Promise<PagedResult<PredefineUser>> {
+    const { data } = await http.get<PagedResult<PredefineUser>>(ENDPOINTS.userProvision, {
+      params: query
+    })
+
+    return data
+  },
+
+  async get(id: string): Promise<PredefineUser> {
+    const { data } = await http.get<PredefineUser>(`${ENDPOINTS.userProvision}/${id}`)
+
+    return data
+  },
+
+  async create(input: CreatePredefineUser): Promise<PredefineUser> {
+    const { data } = await http.post<PredefineUser>(ENDPOINTS.userProvision, input)
+
+    return data
+  },
+
+  /** 批量预置（一次几百名教师时用）。 */
+  async import(users: CreatePredefineUser[], batchNo?: string): Promise<ImportPredefineResult> {
+    const { data } = await http.post<ImportPredefineResult>(`${ENDPOINTS.userProvision}/import`, {
+      users,
+      batchNo: batchNo ?? null
+    })
+
+    return data
+  },
+
+  /** 续期激活码（教师一直没激活时用）。 */
+  async renew(id: string, validDays = 30): Promise<PredefineUser> {
+    const { data } = await http.post<PredefineUser>(
+      `${ENDPOINTS.userProvision}/${id}/renew-activation`,
+      {},
+      { params: { validDays } }
+    )
+
+    return data
+  },
+
+  /** 吊销（激活码作废，已激活的账号也会被停用）。 */
+  async revoke(id: string): Promise<PredefineUser> {
+    const { data } = await http.post<PredefineUser>(`${ENDPOINTS.userProvision}/${id}/revoke`, {})
+
+    return data
+  },
+
+  async remove(id: string): Promise<void> {
+    await http.delete(`${ENDPOINTS.userProvision}/${id}`)
+  },
+
+  /**
+   * 本人激活（**匿名接口**，激活页在登录之前使用）。
+   *
+   * 这里用裸 axios 而不是 http 实例：http 会附加本地可能已过期的令牌，
+   * 并在 401 时触发"刷新令牌 + 重放"，而激活本来就不该带令牌 ——
+   * 带着过期令牌去调匿名接口，会被拦截器绕进刷新流程，反而报出莫名其妙的错。
+   */
+  async activate(input: ActivateUser): Promise<ActivateUserResult> {
+    const { data } = await axios.post<ActivateUserResult>(
+      `${ENDPOINTS.userProvision}/activate`,
+      input
+    )
+
+    return data
   }
 }
 

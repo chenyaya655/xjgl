@@ -78,6 +78,14 @@ const staticRoutes: RouteRecordRaw[] = [
     meta: { title: '登录', anonymous: true }
   },
   {
+    // 账号激活是**公开页面**：教师此时还没有账号，登录不了。
+    // 它只调用一个匿名接口（POST /api/app/user-provision/activate）。
+    path: '/activate',
+    name: 'activate',
+    component: () => import('@/views/activate/index.vue'),
+    meta: { title: '账号激活', anonymous: true }
+  },
+  {
     path: '/',
     name: 'layout',
     component: () => import('@/layout/MainLayout.vue'),

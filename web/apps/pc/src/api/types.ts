@@ -791,3 +791,77 @@ export interface CreateUpdateModuleAction {
   isEnabled: boolean
   isDefaultGranted: boolean
 }
+
+// ---------------------------------------------------------------------------
+// 用户预置与激活
+// ---------------------------------------------------------------------------
+
+export interface PredefineUser {
+  id: string
+  realName: string
+  phoneNumber: string
+  orgId: string
+  orgPathCode?: string | null
+  /** 逗号分隔的角色名（后端存的是字符串） */
+  roleNames?: string | null
+  position?: string | null
+  status: string
+  statusName: string
+  activationCode: string
+  activationExpiresAt: string
+  activatedUserId?: string | null
+  activatedAt?: string | null
+  batchNo?: string | null
+  remark?: string | null
+  creationTime: string
+}
+
+export interface CreatePredefineUser {
+  realName: string
+  phoneNumber: string
+  idCardNumber?: string | null
+  orgId: string
+  roleNames?: string | null
+  position?: string | null
+  remark?: string | null
+  /** 激活码有效期（天），默认 30 */
+  activationValidDays: number
+}
+
+export interface PredefineUserQuery extends PagedRequest {
+  orgId?: string
+  includeDescendantOrgs?: boolean
+  keyword?: string
+  status?: string
+  batchNo?: string
+}
+
+export interface ActivateUser {
+  phoneNumber: string
+  realName: string
+  idCardNumber?: string | null
+  activationCode: string
+  password: string
+}
+
+export interface ActivateUserResult {
+  userId: string
+  userName: string
+  realName: string
+  orgId: string
+  roles: string[]
+}
+
+export interface ImportPredefineError {
+  rowIndex: number
+  realName?: string | null
+  phoneNumber?: string | null
+  message: string
+}
+
+export interface ImportPredefineResult {
+  batchNo: string
+  total: number
+  succeeded: number
+  errors: ImportPredefineError[]
+}
