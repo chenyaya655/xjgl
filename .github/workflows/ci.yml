@@ -64,15 +64,27 @@ jobs:
       - name: 还原与构建
         run: dotnet build Xjgl.sln -c Release
 
+      # PDF 渲染（学籍卡/花名册）会真的画中文，镜像里没有中文字体就会因"缺少字形"失败。
+      # 这不是测试太脆，而是真实反映"部署环境缺字体就打不出学籍卡"——
+      # 生产环境同样需要装字体（见 README 的已知限制）。
+      - name: 安装中文字体（PDF 渲染需要）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
       # 集成测试打真实数据库，因此必须先建表与种子数据。
       # DbMigrator 是幂等的，重复执行不会产生脏数据。
       - name: 初始化数据库（迁移 + 种子）
         run: dotnet run --project src/Xjgl.DbMigrator -c Release --no-build
 
       - name: 单元测试（不依赖数据库）
+        env:
+          XJGL_PRINT_FONT: Noto Sans CJK SC
         run: dotnet run --project test/Xjgl.Domain.Tests -c Release --no-build
 
       - name: 集成测试（真实 PostgreSQL）
+        env:
+          XJGL_PRINT_FONT: Noto Sans CJK SC
         run: dotnet run --project test/Xjgl.Application.Tests -c Release --no-build
 
       # 这一条是为了守住一个真实踩过的缺陷：某个接口的参数元数据无法被 SwaggerGen

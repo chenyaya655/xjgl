@@ -1125,3 +1125,23 @@ export interface StudentChangeLogQuery {
   maxResultCount?: number
   sorting?: string
 }
+
+// ---------------------------------------------------------------------------
+// 打印（学籍卡 / 花名册）
+// ---------------------------------------------------------------------------
+
+export interface StudentRosterQuery {
+  schoolOrgId?: string | null
+  includeDescendantOrgs?: boolean
+  academicYear?: string | null
+  gradeId?: string | null
+  classId?: string | null
+  studentStatusCode?: string | null
+  keyword?: string | null
+
+  /** 姓名脱敏（对外提供名单时使用；校内打印不需要）。 */
+  maskNames?: boolean
+
+  /** 最大行数（默认 2000，上限 10000）。 */
+  maxRows?: number
+}

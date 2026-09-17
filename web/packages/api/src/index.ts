@@ -58,6 +58,7 @@ import type {
   StudentListItem,
   StudentChangeLog,
   StudentChangeLogQuery,
+  StudentRosterQuery,
   StudentQuery,
   SubmitChangeApply,
   Subsidy,
@@ -131,6 +132,13 @@ export const ENDPOINTS = {
    * 查/增把动作名放前面），全局查询是 `GET /api/app/student-change-log`。
    */
   studentChangeLog: '/api/app/student-change-log',
+
+  /**
+   * 打印（学籍卡 / 花名册）。**手写控制器**而不是应用服务：
+   * 产物是二进制 PDF，走自动 API 会被序列化成 base64 塞进 JSON。
+   * 前端以 `responseType: 'blob'` 取回，再用 Blob URL 触发下载。
+   */
+  studentPrint: '/api/print',
 
   photo: '/api/app/photo',
   photoMissingList: '/api/app/photo/missing-photo-list',
@@ -832,6 +840,33 @@ export const studentProfileApi = {
 
   async deletePhysical(id: string): Promise<void> {
     await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/physical`)
+  }
+}
+
+/**
+ * 打印（学籍卡 / 花名册）。
+ *
+ * 返回值是 **Blob** 而不是字符串：PDF 里可能含有中文与二进制字体数据，
+ * 一旦被 axios 当成文本处理就会损坏（这也是要显式写 `responseType: 'blob'` 的原因）。
+ */
+export const studentPrintApi = {
+  /** 学籍卡（A4 纵向，一人一页）。 */
+  async studentCard(studentId: string): Promise<Blob> {
+    const { data } = await http.get<Blob>(`${ENDPOINTS.studentPrint}/student-card/${studentId}`, {
+      responseType: 'blob'
+    })
+
+    return data
+  },
+
+  /** 花名册（A4 横向，带页码），按当前筛选条件。 */
+  async studentRoster(query: StudentRosterQuery): Promise<Blob> {
+    const { data } = await http.get<Blob>(`${ENDPOINTS.studentPrint}/student-roster`, {
+      params: query,
+      responseType: 'blob'
+    })
+
+    return data
   }
 }
 

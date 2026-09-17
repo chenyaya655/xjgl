@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { codeApi, studentChangeLogApi, studentProfileApi } from '@xjgl/api'
+import { codeApi, studentChangeLogApi, studentPrintApi, studentProfileApi } from '@xjgl/api'
 import type {
   CodeItemLookup,
   Guardian,
@@ -56,6 +56,38 @@ const visible = computed({
 })
 
 const canEdit = computed(() => auth.can(MetadataPermissions.Stu.Student.Update))
+const canPrint = computed(() => auth.can(MetadataPermissions.Stu.Student.Print))
+
+const printing = ref(false)
+
+/**
+ * 打印学籍卡。
+ *
+ * 用 Blob 下载而不是 `window.open`：打印接口要求 Bearer 令牌，
+ * 直接开新窗口带不上 Authorization 头，会拿到 401。
+ */
+async function printCard(): Promise<void> {
+  if (!studentId.value || !props.student) {
+    return
+  }
+
+  printing.value = true
+
+  try {
+    const blob = await studentPrintApi.studentCard(studentId.value)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+
+    link.href = url
+    link.download = `学籍卡_${props.student.name}_${props.student.studentNo}.pdf`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    ElMessage.error('打印学籍卡失败，请稍后重试（若持续失败，请检查服务器字体配置）')
+  } finally {
+    printing.value = false
+  }
+}
 
 const studentId = computed(() => props.student?.id ?? '')
 
@@ -531,6 +563,7 @@ onMounted(loadOptions)
         新增{{ tabs.find((t) => t.key === activeTab)?.label }}
       </el-button>
       <el-button :loading="loading" @click="loadRows">刷新</el-button>
+      <el-button v-if="canPrint" :loading="printing" @click="printCard">打印学籍卡</el-button>
       <span v-if="activeTab === 'changeLog'" class="profile__hint">
         变更记录由系统自动写入，不可修改（留痕要可信，就不能允许事后编辑）
       </span>

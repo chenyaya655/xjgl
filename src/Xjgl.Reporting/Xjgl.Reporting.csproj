@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Xjgl.Reporting</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      PDF 渲染独立成一个项目，而不是塞进 Xjgl.Application：
+        - 渲染只依赖"视图模型 + 字体"，不该反向依赖业务层；
+        - QuestPDF/SkiaSharp 带原生依赖（Linux 上还要 fontconfig），
+          放在最外层项目里，业务层就不必为它操心运行时环境。
+    -->
+    <PackageReference Include="QuestPDF" Version="$(QuestPdfVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Xjgl.Domain.Shared\Xjgl.Domain.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

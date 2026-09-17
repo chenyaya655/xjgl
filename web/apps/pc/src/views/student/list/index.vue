@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { orgApi, studentApi, studentImportApi, codeApi } from '@xjgl/api'
+import { orgApi, studentApi, studentImportApi, studentPrintApi, codeApi } from '@xjgl/api'
 import type { ImportColumn, ImportStudentsResult, OrgDto, StudentListItem } from '@xjgl/api'
 import AppIcon from '@/components/AppIcon.vue'
 import StudentProfileDrawer from '@/components/StudentProfileDrawer.vue'
@@ -117,6 +117,67 @@ const profileStudent = ref<StudentListItem | null>(null)
 function openProfile(row: StudentListItem): void {
   profileStudent.value = row
   profileVisible.value = true
+}
+
+// ---------------------------------------------------------------------------
+// 打印（学籍卡 / 花名册）
+// ---------------------------------------------------------------------------
+
+const printingCard = ref(false)
+const printingRoster = ref(false)
+
+/** 用 Blob URL 触发下载：PDF 是二进制，不能走 window.open（带不上 Authorization 头）。 */
+function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  link.href = url
+  link.download = fileName
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function printCard(row: StudentListItem): Promise<void> {
+  printingCard.value = true
+
+  try {
+    const blob = await studentPrintApi.studentCard(row.id)
+
+    downloadBlob(blob, `学籍卡_${row.name}_${row.studentNo}.pdf`)
+  } catch {
+    ElMessage.error('打印学籍卡失败，请稍后重试（若持续失败，请检查服务器字体配置）')
+  } finally {
+    printingCard.value = false
+  }
+}
+
+/**
+ * 打印花名册：**沿用当前筛选条件**。
+ *
+ * 这一点很重要：如果花名册忽略筛选条件，"我筛出二班来打印"就会印出全校，
+ * 而这种错误在校对时才会被发现 —— 纸已经印出来了。
+ */
+async function printRoster(): Promise<void> {
+  printingRoster.value = true
+
+  try {
+    const blob = await studentPrintApi.studentRoster({
+      schoolOrgId: query.schoolOrgId,
+      studentStatusCode: query.studentStatusCode,
+      keyword: query.keyword || undefined,
+      maxRows: 2000
+    })
+
+    const school = schools.value.find((s) => s.id === query.schoolOrgId)
+    const parts = ['花名册', school?.name, query.keyword].filter(Boolean)
+
+    downloadBlob(blob, `${parts.join('_')}.pdf`)
+    ElMessage.success('花名册已生成，请在下载目录查看')
+  } catch {
+    ElMessage.error('打印花名册失败，请稍后重试（若持续失败，请检查服务器字体配置）')
+  } finally {
+    printingRoster.value = false
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +363,15 @@ onMounted(async () => {
               <AppIcon name="Download" />
               <span>导出</span>
             </el-button>
+            <el-button
+              v-if="auth.can(MetadataPermissions.Stu.Student.Print)"
+              plain
+              :loading="printingRoster"
+              @click="printRoster"
+            >
+              <AppIcon name="Printer" />
+              <span>打印花名册</span>
+            </el-button>
             <el-button v-if="auth.can(MetadataPermissions.Stu.Student.Create)" type="primary">
               <AppIcon name="Plus" />
               <span>新增学生</span>
@@ -349,9 +419,17 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="90" align="center" fixed="right">
+        <el-table-column label="操作" width="150" align="center" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openProfile(row)">详情</el-button>
+            <el-button
+              v-if="auth.can(MetadataPermissions.Stu.Student.Print)"
+              link
+              type="primary"
+              @click="printCard(row)"
+            >
+              学籍卡
+            </el-button>
           </template>
         </el-table-column>
       </el-table>

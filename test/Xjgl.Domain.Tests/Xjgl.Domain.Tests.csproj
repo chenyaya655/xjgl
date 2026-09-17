@@ -20,6 +20,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Xjgl.Domain.Shared\Xjgl.Domain.Shared.csproj" />
     <ProjectReference Include="..\..\src\Xjgl.Domain\Xjgl.Domain.csproj" />
+    <!-- PDF 渲染（学籍卡 / 花名册）：纯内存渲染，不碰数据库，适合放单元测试 -->
+    <ProjectReference Include="..\..\src\Xjgl.Reporting\Xjgl.Reporting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

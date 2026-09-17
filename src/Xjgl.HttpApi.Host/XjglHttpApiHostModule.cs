@@ -30,6 +30,7 @@ using Xjgl.Caching;
 using Xjgl.Data;
 using Xjgl.EntityFrameworkCore;
 using Xjgl.Photos;
+using Xjgl.Reporting;
 using Xjgl.SqlSugarCore;
 
 namespace Xjgl;
@@ -52,7 +53,9 @@ namespace Xjgl;
     typeof(XjglHttpApiModule),
     typeof(XjglApplicationModule),
     typeof(XjglEntityFrameworkCoreModule),
-    typeof(XjglSqlSugarCoreModule)
+    typeof(XjglSqlSugarCoreModule),
+    // PDF 渲染（学籍卡 / 花名册）：独立项目，只有 Host 需要把它装配进来
+    typeof(XjglReportingModule)
 )]
 public class XjglHttpApiHostModule : AbpModule
 {

@@ -12,6 +12,8 @@
     <ProjectReference Include="..\Xjgl.EntityFrameworkCore\Xjgl.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\Xjgl.SqlSugarCore\Xjgl.SqlSugarCore.csproj" />
     <ProjectReference Include="..\Xjgl.HttpApi\Xjgl.HttpApi.csproj" />
+    <!-- PDF 渲染（学籍卡 / 花名册）：只有 Host 需要装配渲染实现，业务层只依赖 Domain.Shared 里的接口 -->
+    <ProjectReference Include="..\Xjgl.Reporting\Xjgl.Reporting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

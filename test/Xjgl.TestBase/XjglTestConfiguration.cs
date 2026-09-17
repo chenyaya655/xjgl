@@ -58,8 +58,18 @@ public static class XjglTestConfiguration
                 // 熔断参数调小，让测试能在几百毫秒内观察到「熔断→恢复」
                 ["Xjgl:Photo:MinimumSamples"] = "3",
                 ["Xjgl:Photo:FailureRateThreshold"] = "0.5",
-                ["Xjgl:Photo:OpenSeconds"] = "1"
+                ["Xjgl:Photo:OpenSeconds"] = "1",
+
+                // 打印字体：集成测试会真的渲染 PDF，因此必须能在当前环境找到含中文的字体。
+                // Windows 上默认微软雅黑；CI 的 Linux 镜像装 fonts-noto-cjk 并通过
+                // 环境变量 XJGL_PRINT_FONT 指定字体族。
+                ["Xjgl:Print:DefaultFontFamily"] = PrintFontFamily,
+                ["Xjgl:Print:UseSystemFonts"] = "true"
             })
             .Build();
     }
+
+    /// <summary>打印用的中文字体族（可用环境变量覆盖，便于在 Linux/CI 上跑）。</summary>
+    public static string PrintFontFamily =>
+        Environment.GetEnvironmentVariable("XJGL_PRINT_FONT") ?? "Microsoft YaHei";
 }

@@ -24,6 +24,8 @@
     -->
     <DotNetExtVersion>10.0.9</DotNetExtVersion>
     <SqlSugarVersion>5.1.4.221</SqlSugarVersion>
+    <!-- PDF 渲染（学籍卡 / 花名册）。QuestPDF 社区版对年收入 100 万美元以下的组织免费。 -->
+    <QuestPdfVersion>2026.9.0</QuestPdfVersion>
   </PropertyGroup>
 
 </Project>
