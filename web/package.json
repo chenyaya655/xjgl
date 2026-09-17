@@ -1,0 +1,16 @@
+{
+  "name": "xjgl-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "河南省学籍管理系统 —— 前端工作区（PC / H5 / 小程序）",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @xjgl/pc dev",
+    "build": "pnpm --filter @xjgl/pc build",
+    "typecheck": "pnpm --filter @xjgl/pc typecheck",
+    "preview": "pnpm --filter @xjgl/pc preview"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

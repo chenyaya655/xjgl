@@ -62,6 +62,18 @@ public class OpenIddictDataSeedContributor : IDataSeedContributor, ITransientDep
                 Resources = { XjglConsts.OpenIddictAudience }
             });
         }
+
+        // offline_access 必须显式注册成一个 Scope，否则客户端请求它会被判为
+        // invalid_scope —— 而拿不到 refresh_token 就意味着教师每 1 小时被踢一次登录。
+        // 它本身不携带任何资源（Resources 为空），只是「允许发刷新令牌」的开关。
+        if (await _openIddictScopeRepository.FindByNameAsync(OpenIddictConstants.Scopes.OfflineAccess) == null)
+        {
+            await _scopeManager.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = OpenIddictConstants.Scopes.OfflineAccess,
+                DisplayName = "离线访问（用于刷新登录状态）"
+            });
+        }
     }
 
     private async Task CreateApplicationsAsync()
@@ -72,6 +84,7 @@ public class OpenIddictDataSeedContributor : IDataSeedContributor, ITransientDep
             OpenIddictConstants.Permissions.Scopes.Phone,
             OpenIddictConstants.Permissions.Scopes.Profile,
             OpenIddictConstants.Permissions.Scopes.Roles,
+            OpenIddictConstants.Scopes.OfflineAccess,
             XjglConsts.ApiScope
         };
 

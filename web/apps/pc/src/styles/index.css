@@ -1,0 +1,102 @@
+/**
+ * 全局样式。
+ *
+ * 这里只做三件事：基础重置、首屏骨架、生僻字字体装配。
+ * 组件样式一律写在各自的 <style scoped> 里 —— 全局样式表越薄，
+ * 后面加多端（H5 / 小程序）时的样式冲突越少。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--xjgl-font-family);
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  background-color: #f5f7fa;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------------
+ * 生僻字字体
+ *
+ * 学籍系统的姓名里会出现 𰻞、𠮷、㵘 这类字，它们落在 CJK 扩展 B 及以上区段，
+ * 常见系统字体（微软雅黑、思源黑体常规版）**都不包含**，表现为方块（豆腐块）。
+ *
+ * 处理办法：
+ *   1) 用 unicode-range 把扩展区段单独指到一个覆盖全的字体文件（如 Plangothic）；
+ *   2) 字体文件放在 public/fonts 下按区段分片，浏览器只下载真正用到的那几片；
+ *   3) fallback 链里保留系统字体，避免字体文件没部署时整站字体变样。
+ *
+ * 注意：字体文件体积较大（扩展区累积数十 MB），因此**不放进代码仓库**，
+ * 由部署时放到 web/apps/pc/public/fonts/ 下。缺失时下面的 @font-face
+ * 会静默失败，界面回落到系统字体 —— 生僻字显示为方块，但系统功能不受影响。
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --xjgl-font-family: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Source Han Sans SC',
+    'Noto Sans CJK SC', 'Plangothic P1', 'Plangothic P2', sans-serif;
+}
+
+@font-face {
+  font-family: 'Plangothic P1';
+  src: url('/fonts/PlangothicP1-Regular.woff2') format('woff2');
+  font-display: swap;
+  /* CJK 扩展 B ~ F：生僻字的绝大部分落在这里 */
+  unicode-range: U+20000-2A6DF, U+2A700-2EBEF, U+30000-323AF;
+}
+
+@font-face {
+  font-family: 'Plangothic P2';
+  src: url('/fonts/PlangothicP2-Regular.woff2') format('woff2');
+  font-display: swap;
+  /* CJK 扩展 G / H / I 与兼容补充 */
+  unicode-range: U+2EBF0-2EE5F, U+2F800-2FA1F, U+30000-3134A;
+}
+
+/* ---------------------------------------------------------------------------
+ * 首屏骨架（index.html 里就有，JS 加载完后被 Vue 覆盖）
+ * ------------------------------------------------------------------------- */
+
+.app-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 16px;
+  color: #6b7c93;
+}
+
+.app-loading__spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #dbe4ef;
+  border-top-color: #2c5f8d;
+  border-radius: 50%;
+  animation: app-loading-spin 0.8s linear infinite;
+}
+
+@keyframes app-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 打印（学籍卡、花名册）时隐藏交互元素 */
+@media print {
+  .layout__aside,
+  .layout__header,
+  .no-print {
+    display: none !important;
+  }
+}

@@ -56,6 +56,8 @@ yarn-error.log*
 coverage/
 .nyc_output/
 unpackage/
+# pnpm 的内容寻址仓库（可能落在仓库根目录）
+.pnpm-store/
 # uni-app / 小程序产物
 web/apps/mp/dist/
 web/apps/mp/unpackage/
