@@ -1,0 +1,43 @@
+# 编辑器统一配置
+#
+# 放进仓库的目的：让不同人（后端用 VS、前端用 VS Code）的默认缩进、
+# 换行符、文件编码保持一致，避免"整文件 diff"淹没真正的改动。
+# VS 与 VS Code 都原生支持 .editorconfig，不需要装插件。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# ---- 后端（C#）----
+[*.cs]
+indent_size = 4
+
+# 本项目全中文注释，不做列宽硬限制；这里只固定几个容易吵起来的规则
+csharp_new_line_before_open_brace = all
+csharp_style_namespace_declarations = file_scoped:suggestion
+dotnet_sort_system_directives_first = true
+
+# ---- 前端 ----
+[*.{ts,js,vue,json,css,scss,html}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+# ---- 文档与数据 ----
+[*.md]
+# Markdown 里行尾两个空格是有意义的（换行），不能裁掉
+trim_trailing_whitespace = false
+
+[*.{sql,ps1,sh}]
+indent_size = 4
+
+# ---- 生成物不参与格式校验 ----
+[*.{Designer.cs,g.cs}]
+generated_code = true

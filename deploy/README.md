@@ -69,8 +69,7 @@ Test-NetConnection 127.0.0.1 -Port 5432   # 5432/6379/5672/15672 都应为 True
 ## 二、建表与初始化数据
 
 ```bash
-# 在 Windows 侧（仓库根目录）
-cd D:\StudentManagement
+# 在 Windows 侧（进入仓库根目录后执行）
 dotnet run --project src\Xjgl.DbMigrator
 ```
 

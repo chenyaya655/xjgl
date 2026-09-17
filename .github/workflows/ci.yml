@@ -1,0 +1,132 @@
+name: CI
+
+# 触发：推送到主分支、以及所有 PR。
+# 不在文档-only 的改动上跑全部测试（省时间），但 .md 改动仍会跑一次构建以保证不破坏编译。
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+# 同一分支的新推送取消上一次未跑完的运行
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  # ABP 10.6 依赖 EF Core 10.0.9，见 Directory.Build.props 里的说明
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  backend:
+    name: 后端（构建 / 单元测试 / 集成测试 / Swagger 冒烟）
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: xjgl_test
+          POSTGRES_USER: xjgl
+          POSTGRES_PASSWORD: Xjgl@Dev2026
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xjgl -d xjgl_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # 集成测试与 DbMigrator 都读这个连接串
+      ConnectionStrings__Default: "Host=127.0.0.1;Port=5432;Database=xjgl_test;User ID=xjgl;Password=Xjgl@Dev2026;Timeout=30;Command Timeout=120"
+      XJGL_TEST_CONNECTION: "Host=127.0.0.1;Port=5432;Database=xjgl_test;User ID=xjgl;Password=Xjgl@Dev2026;Timeout=30;Command Timeout=120"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 缓存 NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: 还原与构建
+        run: dotnet build Xjgl.sln -c Release
+
+      # 集成测试打真实数据库，因此必须先建表与种子数据。
+      # DbMigrator 是幂等的，重复执行不会产生脏数据。
+      - name: 初始化数据库（迁移 + 种子）
+        run: dotnet run --project src/Xjgl.DbMigrator -c Release --no-build
+
+      - name: 单元测试（不依赖数据库）
+        run: dotnet test test/Xjgl.Domain.Tests -c Release --no-build
+
+      - name: 集成测试（真实 PostgreSQL）
+        run: dotnet test test/Xjgl.Application.Tests -c Release --no-build
+
+      # 这一条是为了守住一个真实踩过的缺陷：某个接口的参数元数据无法被 SwaggerGen
+      # 处理时，**整个 swagger.json 会生成失败（500）**，所有接口的文档一起消失，
+      # 而接口本身调用完全正常 —— 只有真的去请求一次才会发现。
+      - name: Swagger 冒烟（swagger.json 必须能生成）
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:44300
+        run: |
+          dotnet run --project src/Xjgl.HttpApi.Host -c Release --no-build &
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:44300/swagger/v1/swagger.json || true)
+            if [ "$code" = "200" ]; then
+              echo "✅ swagger.json 生成成功"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "❌ swagger.json 未能生成（最后一次 HTTP $code）"
+          echo "常见原因：[FromForm] 用在了 IFormFile 上，或存在路由冲突导致 SwaggerGen 抛异常。"
+          exit 1
+
+  frontend:
+    name: 前端（类型检查 / 生产构建）
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 启用 corepack（pnpm 版本由 web/package.json 的 packageManager 固定）
+        run: corepack enable
+
+      - name: 缓存 pnpm 存储
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: 安装依赖（使用锁文件）
+        run: corepack pnpm@9.15.0 install --frozen-lockfile
+
+      - name: 类型检查
+        run: corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
+
+      - name: 生产构建
+        run: corepack pnpm@9.15.0 --filter @xjgl/pc run build
