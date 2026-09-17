@@ -1084,3 +1084,44 @@ export interface PhysicalInput {
   doctorAdvice?: string | null
   remark?: string | null
 }
+
+// ---------------------------------------------------------------------------
+// 学籍变更流水（留痕）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条变更记录。
+ *
+ * 一次操作可能产生多行（每个变化的字段一行），它们共享 `batchId`；
+ * 界面上可以据此把"一次修改"合并显示。
+ * `oldValue`/`newValue` 已是后端翻译好的可读文本（码值形如「在读（01）」），
+ * 身份证号只给摘要前缀 —— 明文永远不会出现在流水里。
+ */
+export interface StudentChangeLog {
+  id: string
+  studentId: string
+  studentNo: string
+  studentName: string
+  batchId: string
+  action: string
+  actionName: string
+  fieldName?: string | null
+  fieldLabel?: string | null
+  oldValue?: string | null
+  newValue?: string | null
+  reason?: string | null
+  operatorId?: string | null
+  operatorName?: string | null
+  occurredAt: string
+  source?: string | null
+}
+
+export interface StudentChangeLogQuery {
+  studentId?: string | null
+  action?: string | null
+  from?: string | null
+  to?: string | null
+  skipCount?: number
+  maxResultCount?: number
+  sorting?: string
+}

@@ -93,7 +93,10 @@ function resolvePath(raw) {
 // ---- 4) 收集前端调用 ---------------------------------------------------------
 const calls = []
 
-for (const m of apiIndex.matchAll(/http\.(get|post|put|delete)<[^>]*>\(\s*([^\n]*)/g)) {
+// 类型参数里可能还有嵌套泛型（`http.get<PagedResult<StudentChangeLog>>(...)`），
+// 用 `<[^>]*>` 匹配会漏掉这种写法 —— 漏掉就是"少核对一次"，属于假绿灯。
+// 因此这里用 `<[^(]*>` 一直吃到调用的左括号；下面还会用"原始出现次数"做交叉校验。
+for (const m of apiIndex.matchAll(/http\.(get|post|put|delete)(?:<[^(]*>)?\(\s*([^\n]*)/g)) {
   calls.push({
     verb: m[1].toUpperCase(),
     path: resolvePath(m[2]),
@@ -101,6 +104,10 @@ for (const m of apiIndex.matchAll(/http\.(get|post|put|delete)<[^>]*>\(\s*([^\n]
     line: apiIndex.slice(0, m.index).split('\n').length
   })
 }
+
+// 交叉校验：文件里实际出现了多少次 `http.<verb>`，就必须解析出多少条，
+// 否则说明上面的正则漏了某种写法（比如又出现了新的调用形式）
+const rawInvocationCount = (apiIndex.match(/\bhttp\.(get|post|put|delete)\s*[<(]/g) ?? []).length
 
 // ---- 5) 逐项核对 -------------------------------------------------------------
 const lines = []
@@ -149,6 +156,14 @@ if (unidentified.length > 0) {
 }
 
 console.log(`\n实际核对 ${checked} 项 / 共 ${calls.length} 个调用；动词或路由不匹配 ${mismatched} 项`)
+
+if (calls.length !== rawInvocationCount) {
+  console.error(
+    `\n❌ 解析出 ${calls.length} 个调用，但文件里出现了 ${rawInvocationCount} 次 http.<verb>：` +
+      '有调用被正则漏掉了，请检查 index.ts 的写法与上面的正则。'
+  )
+  process.exit(1)
+}
 
 if (checked < MIN_EXPECTED_CALLS) {
   console.error(

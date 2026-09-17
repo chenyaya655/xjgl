@@ -56,6 +56,8 @@ import type {
   RewardInput,
   SaveFlowTemplate,
   StudentListItem,
+  StudentChangeLog,
+  StudentChangeLogQuery,
   StudentQuery,
   SubmitChangeApply,
   Subsidy,
@@ -123,6 +125,12 @@ export const ENDPOINTS = {
    *   这类"看着别扭但就是这样"的路由必须回 swagger 核对（见 tools/audit-routes.mjs）。
    */
   studentProfile: '/api/app/student-profile',
+
+  /**
+   * 学籍变更流水（留痕）。查询走 `student-logs/{studentId}`（与子表同一套约定：
+   * 查/增把动作名放前面），全局查询是 `GET /api/app/student-change-log`。
+   */
+  studentChangeLog: '/api/app/student-change-log',
 
   photo: '/api/app/photo',
   photoMissingList: '/api/app/photo/missing-photo-list',
@@ -824,6 +832,33 @@ export const studentProfileApi = {
 
   async deletePhysical(id: string): Promise<void> {
     await http.delete<void>(`${ENDPOINTS.studentProfile}/${id}/physical`)
+  }
+}
+
+/**
+ * 学籍变更流水（只读）。
+ *
+ * 没有写入接口是**刻意的**：能被改的审计日志等于没有审计。
+ * 流水由后端在业务操作的工作单元里写入。
+ */
+export const studentChangeLogApi = {
+  /** 某个学生的变更历史（按时间倒序）。 */
+  async getStudentLogs(studentId: string, maxResultCount = 200): Promise<StudentChangeLog[]> {
+    const { data } = await http.get<{ items: StudentChangeLog[] }>(
+      `${ENDPOINTS.studentChangeLog}/student-logs/${studentId}`,
+      { params: { maxResultCount } }
+    )
+
+    return data.items ?? []
+  },
+
+  /** 全局查询（按动作 / 时间过滤），受数据范围约束。 */
+  async getList(query: StudentChangeLogQuery): Promise<PagedResult<StudentChangeLog>> {
+    const { data } = await http.get<PagedResult<StudentChangeLog>>(ENDPOINTS.studentChangeLog, {
+      params: query
+    })
+
+    return data
   }
 }
 

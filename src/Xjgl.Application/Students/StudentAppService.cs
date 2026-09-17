@@ -40,6 +40,9 @@ public class StudentAppService : XjglAppService, IStudentAppService
     /// <summary>数据范围守卫（与学生子表服务共用）。</summary>
     private readonly IStudentAccessGuard _guard;
 
+    /// <summary>学籍变更留痕。</summary>
+    private readonly IStudentChangeLogger _changeLogger;
+
     public StudentAppService(
         IXjglRepository<StuStudent> students,
         IXjglRepository<SysOrg> orgs,
@@ -51,7 +54,8 @@ public class StudentAppService : XjglAppService, IStudentAppService
         IClock clock,
         IUserDataScopeProvider dataScopeProvider,
         IIdCardProtector idCards,
-        IStudentAccessGuard guard)
+        IStudentAccessGuard guard,
+        IStudentChangeLogger changeLogger)
     {
         _students = students;
         _orgs = orgs;
@@ -64,6 +68,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
         _dataScopeProvider = dataScopeProvider;
         _idCards = idCards;
         _guard = guard;
+        _changeLogger = changeLogger;
     }
 
     // ------------------------------------------------------------------
@@ -199,6 +204,9 @@ public class StudentAppService : XjglAppService, IStudentAppService
 
         await _students.InsertAsync(entity, autoSave: true);
 
+        // 留痕：建档也要有记录（谁在什么时候建的、学生是谁）
+        await _changeLogger.LogCreatedAsync(entity);
+
         return await GetAsync(entity.Id);
     }
 
@@ -238,9 +246,14 @@ public class StudentAppService : XjglAppService, IStudentAppService
         entity.SchoolOrgId = school.Id;
         entity.AcademicYear = NormalizeAcademicYear(input.AcademicYear);
 
+        // 先取快照再改：留痕用的是"前后比对"，只写真正变化的字段
+        var before = _changeLogger.Snapshot(entity);
+
         ApplyInput(entity, input, idCard, idCardHash, school);
 
         await _students.UpdateAsync(entity, autoSave: true);
+
+        await _changeLogger.LogUpdatedAsync(entity, before);
 
         return await GetAsync(entity.Id);
     }
@@ -251,6 +264,9 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var entity = await _students.GetAsync(id);
 
         await _guard.EnsureInScopeAsync(entity);
+
+        // 留痕写在删除之前：删掉之后就再也拿不到姓名与学籍辅号了
+        await _changeLogger.LogDeletedAsync(entity);
 
         // 说明：学生若处于在途异动流程中，P3 完成后要在这里拒绝删除
         await _students.DeleteAsync(entity, autoSave: true);

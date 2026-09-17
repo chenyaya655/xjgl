@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { codeApi, studentProfileApi } from '@xjgl/api'
+import { codeApi, studentChangeLogApi, studentProfileApi } from '@xjgl/api'
 import type {
   CodeItemLookup,
   Guardian,
@@ -15,6 +15,7 @@ import type {
   ResumeInput,
   Reward,
   RewardInput,
+  StudentChangeLog,
   StudentListItem,
   Subsidy,
   SubsidyInput
@@ -62,7 +63,7 @@ const studentId = computed(() => props.student?.id ?? '')
 // 标签页
 // ---------------------------------------------------------------------------
 
-type TabKey = 'guardian' | 'resume' | 'reward' | 'punishment' | 'subsidy' | 'physical'
+type TabKey = 'guardian' | 'resume' | 'reward' | 'punishment' | 'subsidy' | 'physical' | 'changeLog'
 
 const tabs: { key: TabKey; label: string }[] = [
   { key: 'guardian', label: '监护人' },
@@ -70,7 +71,9 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'reward', label: '奖励' },
   { key: 'punishment', label: '处分' },
   { key: 'subsidy', label: '资助' },
-  { key: 'physical', label: '体质健康' }
+  { key: 'physical', label: '体质健康' },
+  // 只读：能被改的审计日志等于没有审计，因此这一页没有新增/编辑
+  { key: 'changeLog', label: '变更记录' }
 ]
 
 const activeTab = ref<TabKey>('guardian')
@@ -86,6 +89,7 @@ const rewards = ref<Reward[]>([])
 const punishments = ref<Punishment[]>([])
 const subsidies = ref<Subsidy[]>([])
 const physicals = ref<Physical[]>([])
+const changeLogs = ref<StudentChangeLog[]>([])
 
 async function loadRows(): Promise<void> {
   if (!studentId.value) {
@@ -115,6 +119,9 @@ async function loadRows(): Promise<void> {
         break
       case 'physical':
         physicals.value = await studentProfileApi.getPhysicals(id)
+        break
+      case 'changeLog':
+        changeLogs.value = await studentChangeLogApi.getStudentLogs(id)
         break
     }
   } finally {
@@ -286,6 +293,10 @@ const fields = computed<Field[]>(() => {
         { prop: 'doctorAdvice', label: '医生建议', type: 'textarea' },
         { prop: 'remark', label: '备注', type: 'textarea' }
       ]
+
+    case 'changeLog':
+      // 变更记录是只读流水，没有可编辑字段
+      return []
   }
 })
 
@@ -304,6 +315,8 @@ const currentRows = computed<any[]>(() => {
       return subsidies.value
     case 'physical':
       return physicals.value
+    case 'changeLog':
+      return changeLogs.value
   }
 })
 
@@ -461,6 +474,10 @@ function fmtDate(value: unknown): string {
   return typeof value === 'string' && value ? value.slice(0, 10) : '—'
 }
 
+function formatTime(value: unknown): string {
+  return typeof value === 'string' && value ? value.replace('T', ' ').slice(0, 19) : '—'
+}
+
 function fmtText(value: unknown): string {
   return value === null || value === undefined || value === '' ? '—' : String(value)
 }
@@ -506,8 +523,17 @@ onMounted(loadOptions)
     </el-tabs>
 
     <div class="profile__toolbar">
-      <el-button v-if="canEdit" type="primary" @click="openCreate">新增{{ tabs.find((t) => t.key === activeTab)?.label }}</el-button>
+      <el-button
+        v-if="canEdit && activeTab !== 'changeLog'"
+        type="primary"
+        @click="openCreate"
+      >
+        新增{{ tabs.find((t) => t.key === activeTab)?.label }}
+      </el-button>
       <el-button :loading="loading" @click="loadRows">刷新</el-button>
+      <span v-if="activeTab === 'changeLog'" class="profile__hint">
+        变更记录由系统自动写入，不可修改（留痕要可信，就不能允许事后编辑）
+      </span>
     </div>
 
     <!-- 监护人 -->
@@ -619,7 +645,7 @@ onMounted(loadOptions)
     </el-table>
 
     <!-- 体质健康 -->
-    <el-table v-else v-loading="loading" :data="physicals" border stripe>
+    <el-table v-else-if="activeTab === 'physical'" v-loading="loading" :data="physicals" border stripe>
       <el-table-column prop="academicYear" label="学年" width="120" align="center" />
       <el-table-column label="体检日期" width="120">
         <template #default="{ row }">{{ fmtDate(row.checkDate) }}</template>
@@ -643,6 +669,36 @@ onMounted(loadOptions)
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" @click="removeRow(row)">删除</el-button>
         </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 变更记录（只读） -->
+    <el-table v-else v-loading="loading" :data="changeLogs" border stripe>
+      <el-table-column label="时间" width="170">
+        <template #default="{ row }">{{ formatTime(row.occurredAt) }}</template>
+      </el-table-column>
+      <el-table-column prop="actionName" label="操作" width="100" />
+      <el-table-column prop="fieldLabel" label="字段" width="120">
+        <template #default="{ row }">{{ row.fieldLabel ?? '—' }}</template>
+      </el-table-column>
+      <el-table-column label="变更" min-width="260">
+        <template #default="{ row }">
+          <span v-if="row.oldValue || row.newValue">
+            <span class="profile__old">{{ row.oldValue ?? '（空）' }}</span>
+            <span class="profile__arrow">→</span>
+            <span class="profile__new">{{ row.newValue ?? '（空）' }}</span>
+          </span>
+          <span v-else>—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作人" width="120">
+        <template #default="{ row }">{{ row.operatorName ?? '系统' }}</template>
+      </el-table-column>
+      <el-table-column label="来源" width="110">
+        <template #default="{ row }">{{ row.source ?? '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="reason" label="原因" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.reason ?? '—' }}</template>
       </el-table-column>
     </el-table>
 
@@ -740,5 +796,26 @@ onMounted(loadOptions)
 
 .profile__toolbar {
   margin-bottom: 12px;
+}
+
+.profile__hint {
+  margin-left: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.profile__old {
+  color: var(--el-text-color-secondary);
+  text-decoration: line-through;
+}
+
+.profile__arrow {
+  margin: 0 6px;
+  color: var(--el-text-color-secondary);
+}
+
+.profile__new {
+  color: var(--el-color-primary);
+  font-weight: 600;
 }
 </style>

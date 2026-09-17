@@ -35,6 +35,9 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
     private readonly IClock _clock;
     private readonly ILogger<ChangeFlowAppService> _logger;
 
+    /// <summary>学籍变更留痕（审批改学籍主档时写流水）。</summary>
+    private readonly IStudentChangeLogger _changeLogger;
+
     public ChangeFlowAppService(
         IXjglRepository<StuChangeApply> applies,
         IXjglRepository<StuChangeFlowTask> tasks,
@@ -48,6 +51,7 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
         IXjglRepository<SysUserPredefine> predefines,
         IChangeFlowPlanner planner,
         ISequenceService sequenceService,
+        IStudentChangeLogger changeLogger,
         IClock clock,
         ILogger<ChangeFlowAppService> logger)
     {
@@ -64,6 +68,7 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
         _predefines = predefines;
         _planner = planner;
         _sequenceService = sequenceService;
+        _changeLogger = changeLogger;
         _clock = clock;
         _logger = logger;
     }
@@ -551,6 +556,11 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
     {
         var student = await _studentsForUpdate.GetAsync(apply.StudentId);
 
+        // 先取快照：审批改的是学籍主档，同样要进变更流水
+        // （异动自己的流程日志 `stu_change_flow_log` 记的是"审批动作"，
+        //   这里记的是"学籍字段发生了什么变化"，两者互补）
+        var before = _changeLogger.Snapshot(student);
+
         if (!apply.TargetStatusCode.IsNullOrWhiteSpace())
         {
             student.StudentStatusCode = apply.TargetStatusCode!;
@@ -578,6 +588,13 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
 
         await _studentsForUpdate.UpdateAsync(student, autoSave: true);
 
+        // 留痕来源写「学籍异动」并把申请单号带进原因，便于从档案反查是哪一单引起的
+        await _changeLogger.LogUpdatedAsync(
+            student,
+            before,
+            source: "学籍异动",
+            reason: $"异动申请 {apply.ApplyNo} 审核通过");
+
         _logger.LogInformation(
             "异动申请 {ApplyNo} 审核通过，学生 {StudentName} 学籍状态更新为 {Status}。",
             apply.ApplyNo, apply.StudentName, student.StudentStatusCode);
@@ -587,6 +604,8 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
     private async Task RevertStudentChangesAsync(StuChangeApply apply)
     {
         var student = await _studentsForUpdate.GetAsync(apply.StudentId);
+
+        var before = _changeLogger.Snapshot(student);
 
         student.StudentStatusCode = apply.SourceStatusCode ?? student.StudentStatusCode;
         student.GradeId = apply.SourceGradeId;
@@ -603,6 +622,12 @@ public class ChangeFlowAppService : XjglAppService, IChangeFlowAppService
         }
 
         await _studentsForUpdate.UpdateAsync(student, autoSave: true);
+
+        await _changeLogger.LogUpdatedAsync(
+            student,
+            before,
+            source: "学籍异动",
+            reason: $"异动申请 {apply.ApplyNo} 撤销审核，学籍回滚");
 
         _logger.LogWarning(
             "异动申请 {ApplyNo} 撤销审核，学生 {StudentName} 的学籍变更已回滚。",
