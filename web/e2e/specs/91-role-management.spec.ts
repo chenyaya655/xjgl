@@ -50,6 +50,24 @@ async function settle(page: Page): Promise<void> {
 }
 
 /**
+ * 「新建 / 编辑角色」弹窗，**按可访问名定位**。
+ *
+ * 【为什么不能用 `page.locator('.el-overlay-dialog')`】
+ *   角色管理页上有**两个** `el-dialog`：新建/编辑角色，以及「数据范围」。
+ *   Element Plus 会给两者都渲染出 `role="dialog"` 的 `.el-overlay-dialog` 容器，
+ *   于是通配选择器同时匹配到 2 个 → Playwright 的 strict mode 直接报错
+ *   （`resolved to 2 elements`），而**报错发生在判断可见性之前**，
+ *   所以现象是"弹窗明明关了却一直等不到隐藏"。
+ *
+ *   这个缺陷是「数据范围」列与配置弹窗后来加到本页时引入的：
+ *   页面多了一个 dialog，写死类名的断言就失效了 —— 也正是
+ *   "断言要落在用户能感知的语义上，而不是实现细节上"的一个具体例子。
+ */
+function roleFormDialog(page: Page) {
+  return page.getByRole('dialog', { name: '新建角色' })
+}
+
+/**
  * 展开左侧某个子系统菜单，然后断言其中的子项可见。
  *
  * 【为什么不能直接断言子项可见】
@@ -180,7 +198,8 @@ test.describe('角色管理', () => {
     //   不等的话后续点击会被 `.el-overlay-dialog` 遮罩拦住，
     //   Playwright 报的是"subtree intercepts pointer events"并一直重试到超时，
     //   看起来像"按钮点不动"，实际是"上一步的弹窗还开着"。
-    await expect(page.locator('.el-overlay-dialog')).toBeHidden({ timeout: 20_000 })
+    //   选择器必须是**这一个**弹窗（本页还有一个「数据范围」弹窗，见 roleFormDialog 的说明）。
+    await expect(roleFormDialog(page)).toBeHidden({ timeout: 20_000 })
 
     await expect(page.locator('.el-table__row', { hasText: ROLE_NAME })).toHaveCount(1, { timeout: 15_000 })
     await page.screenshot({ path: `${SHOT_DIR}/32-角色管理-已创建.png` })
@@ -229,7 +248,7 @@ test.describe('角色管理', () => {
     await page.getByRole('button', { name: /新建角色/ }).click()
     await page.getByPlaceholder('如 CountyAdmin、SchoolRegistrar').fill(ROLE_NAME)
     await page.getByRole('button', { name: '保存' }).click()
-    await expect(page.locator('.el-overlay-dialog')).toBeHidden({ timeout: 20_000 })
+    await expect(roleFormDialog(page)).toBeHidden({ timeout: 20_000 })
     await expect(page.locator('.el-table__row', { hasText: ROLE_NAME })).toHaveCount(1, { timeout: 15_000 })
 
     // ── 点「分配权限」跳转，角色应被自动带入 ──

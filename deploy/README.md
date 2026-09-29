@@ -174,7 +174,7 @@ docker compose -f docker-compose.prod.yml logs api | grep -E '内容根|没有 a
 | 组件 | 用途 | 许可证要点 |
 |---|---|---|
 | QuestPDF | 学籍卡 / 花名册 PDF | 社区版对年收入 < 100 万美元的组织免费；否则需购买。许可证声明集中在 `PrintFontRegistry` |
-| ImageSharp | 照片缩略图 | Six Labors Split License：开源与小微组织免费，商用需评估 |
+| ImageSharp | 照片缩略图 | Six Labors Split License：开源与小微组织免费，商用需评估。**版本必须钉在 3.1.x**：4.x 起在 MSBuild 里强制校验许可 key，没有 key 会让 `dotnet build` 直接失败（详见 `Directory.Build.props`） |
 | ABP Framework | 应用框架 | LGPL-3.0（或商业版） |
 | 字体（Noto CJK / Plangothic） | 中文与生僻字渲染 | Noto 系列为 SIL OFL；Plangothic 遵循其自身授权，请自行确认 |
 

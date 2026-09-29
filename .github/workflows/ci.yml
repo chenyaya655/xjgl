@@ -4,9 +4,9 @@ name: CI
 # 不在文档-only 的改动上跑全部测试（省时间），但 .md 改动仍会跑一次构建以保证不破坏编译。
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 # 同一分支的新推送取消上一次未跑完的运行
 concurrency:
@@ -239,6 +239,15 @@ jobs:
       # appsettings 里的默认字体族是"微软雅黑"（Windows 才有），CI 装的是 Noto，因此在这里覆盖。
       XJGL_PRINT_FONT: Noto Sans CJK SC
       Xjgl__Print__DefaultFontFamily: Noto Sans CJK SC
+      # ★ 演示种子：`90-demo-walkthrough` 与 `91-role-management` 两份 spec **硬依赖**
+      #   演示账号（`demo-prov-990000` / `Demo@Xjgl2026`，见两份 spec 的头部注释）。
+      #   不开这个开关，迁移器只建组织与预置名单、**不建任何可登录账号**
+      #   （见 DbMigrator 的 appsettings 说明），那两条用例会卡在登录页，
+      #   报错是 `waitForURL('**/dashboard')` 超时 —— 看起来像"前端没跳转"，
+      #   完全指不到"库里根本没有这个账号"。
+      #   口令是**演示口令**，与 deploy/README.md、SECURITY.md 里公开的那一个一致。
+      Xjgl__DemoData__Enabled: "true"
+      Xjgl__DemoData__Password: "Demo@Xjgl2026"
 
     steps:
       - uses: actions/checkout@v4

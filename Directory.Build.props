@@ -26,8 +26,28 @@
     <SqlSugarVersion>5.1.4.221</SqlSugarVersion>
     <!-- PDF 渲染（学籍卡 / 花名册）。QuestPDF 社区版对年收入 100 万美元以下的组织免费。 -->
     <QuestPdfVersion>2026.9.0</QuestPdfVersion>
-    <!-- 图像处理（照片缩略图）。ImageSharp 是纯托管实现，Windows/Linux 行为一致。 -->
-    <ImageSharpVersion>4.1.2</ImageSharpVersion>
+    <!--
+      图像处理（照片缩略图）。ImageSharp 是纯托管实现，Windows/Linux 行为一致。
+
+      ⚠ **必须钉在 3.1.x，不要升到 4.x。**
+      ImageSharp 从 **4.0.0 起在 MSBuild 里强制校验商业许可**（包内多了
+      `build/SixLabors.ImageSharp.targets` + `SixLabors.Licensing.dll`）：
+      没有 `SixLaborsLicenseKey` 或 `sixlabors.lic` 时，`dotnet build`
+      **直接 error 失败**，而不是给一条可以忽略的 warning。
+      后果是"克隆下来就构建不过"——对一个要给别人直接用的仓库是致命的。
+      3.1.12 没有这套校验，`dotnet build` 开箱即过。
+
+      版本选择还核对过已知漏洞：GitHub Advisory 里 3.x 线影响面最高的一条是
+      `>= 3.0.0, < 3.1.11`（GHSA-rxmq-m78w-7wmc，GIF 解码死循环），
+      3.1.12 已在**全部 7 条已知公告**的修复版本之上。
+
+      许可证口径（3.x 与 4.x **相同**，都是 Six Labors Split License）：
+      开源项目与年收入 < 100 万美元的组织免费；商用需自行购买。
+      所以钉 3.1.12 改变的是"能不能构建"，不是"要不要付费"——
+      真要彻底去掉这个许可问题，替换实现只需改 `src/Xjgl.Imaging/`
+      （业务层只依赖 `IImageProcessor` 接口）。
+    -->
+    <ImageSharpVersion>3.1.12</ImageSharpVersion>
 
     <!--
       AutoMapper **显式抬到已修复版本**（债 6）。

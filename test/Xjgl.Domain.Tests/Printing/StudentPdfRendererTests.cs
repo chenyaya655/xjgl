@@ -250,13 +250,13 @@ public class StudentPdfRendererTests
     }
 
     [Fact]
-    public void 配置了含字体文件的目录_登记备用字体族()
+    public void 配置了含字体文件的目录_字体真的被注册给QuestPDF()
     {
-        var sourceFont = FindSystemTtfFont();
+        var known = FindKnownSystemFont();
 
-        if (sourceFont == null)
+        if (known == null)
         {
-            // 这台机器上没有任何 ttf 字体（CI 的精简镜像可能如此）：只验证"目录不存在时回落"
+            // 这台机器上没有任何可用字体（CI 的精简镜像可能如此）：只验证"目录不存在时回落"
             var fallback = new PrintFontRegistry(new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
@@ -269,6 +269,8 @@ public class StudentPdfRendererTests
             return;
         }
 
+        var (sourceFont, familyName) = known.Value;
+
         var directory = Path.Combine(Path.GetTempPath(), "xjgl-fonts-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(directory);
 
@@ -280,14 +282,31 @@ public class StudentPdfRendererTests
                 new Dictionary<string, string?>
                 {
                     ["Xjgl:Print:RareCharacterFontDirectory"] = directory,
-                    ["Xjgl:Print:RareCharacterFontFamily"] = "DengXian"
+                    ["Xjgl:Print:RareCharacterFontFamily"] = familyName
                 }).Build());
 
             registry.EnsureInitialized();
 
             registry.RareCharacterFontAvailable.ShouldBeTrue();
-            registry.RareCharacterFontFamily.ShouldBe("DengXian");
-            QuestPDF.Settings.FontDiscoveryPaths.ShouldContain(directory);
+            registry.RareCharacterFontFamily.ShouldBe(familyName);
+
+            // ★ 关键断言：**向 QuestPDF 要结果**，而不是检查"我们有没有往某个集合里塞路径"。
+            //
+            //   这条断言原先写的是 `QuestPDF.Settings.FontDiscoveryPaths.ShouldContain(directory)`
+            //   —— 它验证的是**中间产物**：路径进了那个列表，不等于字体真的被注册、
+            //   更不等于生僻字真能画出来。而那个属性在 QuestPDF 2026.9 起已被标记
+            //   obsolete（"has been replaced"），官方替代品是
+            //   `FontManager.RegisterFontsFromDirectory`。改成注册之后，
+            //   旧断言自然失效 —— 这恰好说明它测的是实现细节，不是行为。
+            //
+            //   现在直接问 QuestPDF：**这个字体族现在可用吗？**
+            //   `GetRegisteredFonts()` 的文档原话是"Returns information about the fonts
+            //   registered in the library: fonts discovered automatically ... and fonts
+            //   registered manually with the RegisterFont* methods"，正是我们要的口径。
+            QuestPDF.Drawing.FontManager.GetRegisteredFonts()
+                .ShouldContain(
+                    f => f.FamilyName == familyName,
+                    $"配置目录里的字体文件必须真的被注册给 QuestPDF，否则「生僻字不变方块」只是纸面承诺（找不到字体族 {familyName}）");
         }
         finally
         {
@@ -295,18 +314,52 @@ public class StudentPdfRendererTests
         }
     }
 
-    private static string? FindSystemTtfFont()
+    /// <summary>
+    /// 找一个**已知字体族名**的系统字体文件。
+    ///
+    /// 【为什么不复用原来的"随便找一个 ttf"】
+    ///   要断言"字体真的注册上了"，就必须知道那个文件的字体族叫什么名字
+    ///   （`GetRegisteredFonts()` 只给 FamilyName，不会告诉我们它来自哪个文件）。
+    ///   从 ttf 的 name 表里解析家族名属于"为了测试再写一个字体解析器"，
+    ///   不值得；直接认几个 Windows 上常见的字体文件反而更清楚。
+    ///
+    /// 找不到时返回 null，调用方走"只验证回落"的分支 ——
+    /// CI 的 Linux 镜像就是这条路径（它装的是 Noto，不在下面的表里）。
+    /// </summary>
+    private static (string Path, string FamilyName)? FindKnownSystemFont()
     {
         if (!OperatingSystem.IsWindows())
         {
             return null;
         }
 
-        var fontsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts");
+        var fontsDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts");
 
-        return Directory.Exists(fontsDirectory)
-            ? Directory.EnumerateFiles(fontsDirectory, "*.ttf").FirstOrDefault()
-            : null;
+        if (!Directory.Exists(fontsDirectory))
+        {
+            return null;
+        }
+
+        // 字体文件名 → 其家族名（与 Windows 字体查看器里显示的一致）
+        var candidates = new (string FileName, string FamilyName)[]
+        {
+            ("Deng.ttf", "DengXian"),      // 等线
+            ("simsun.ttc", "SimSun"),      // 宋体
+            ("msyh.ttc", "Microsoft YaHei") // 微软雅黑
+        };
+
+        foreach (var (fileName, familyName) in candidates)
+        {
+            var path = Path.Combine(fontsDirectory, fileName);
+
+            if (File.Exists(path))
+            {
+                return (path, familyName);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>1×1 的 PNG（用来验证图片嵌入路径）。</summary>

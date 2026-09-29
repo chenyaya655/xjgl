@@ -39,11 +39,29 @@ git ls-files | Select-String -Pattern "\.pfx$|\.p12$|\.key$|Secrets|\.env$|^\.to
 # 2) 已跟踪文件里有没有本机绝对路径？（期望只命中 2 处，见下方说明）
 git grep -n -I -F "D:\StudentManagement"
 
-# 3) 学习文档是否已随仓库发布（期望：能看到 docs/learning/ 下大量文件）
+# 3) 学习文档是否已随仓库发布（期望：50）
 git ls-files docs/learning | Measure-Object -Line
 
 # 4) 文档相对链接是否都能解析（中文文件名容易断）
 node tools/check-doc-links.mjs
+
+# 5) 所有被跟踪的文本文件都是**合法 UTF-8**（期望：0）
+#    中文仓库最容易出的问题：某个文件被 GBK 编辑器保存过，
+#    GitHub 上整段注释变成乱码，而本地用 GBK 终端看又是"正常"的。
+$enc = New-Object System.Text.UTF8Encoding($false, $true)
+$bad = @()
+foreach ($f in (git -c core.quotePath=false ls-files)) {
+  if (-not [System.IO.File]::Exists($f)) { continue }
+  $b = [System.IO.File]::ReadAllBytes($f)
+  if ($b.Length -eq 0 -or $b -contains 0) { continue }
+  try { [void]$enc.GetString($b) } catch { $bad += $f }
+}
+"非 UTF-8 文件数: $($bad.Count)"; $bad
+
+# 6) 没有"合法 UTF-8 但内容是乱码"的文件（期望：0）
+#    第 5 步查不出这一类：文件是合法 UTF-8，但内容是被误解码过的残骸
+#    （如 `娌冲崡` 而不是 `河南`）。判据是拿它按 GBK 反向编码，
+#    再按 UTF-8 解码，看能不能还原出像样的中文。
 ```
 
 第 2 步的期望结果：**只有 2 行** ——
@@ -51,6 +69,15 @@ node tools/check-doc-links.mjs
 （b）`docs/learning/03-搭建解决方案骨架.md` 里一句**刻意**写的反例
 （"不要照抄本机路径"，它必须含这个字面量才讲得清）。
 除此之外**不该有任何文件命中**；冒出别的文件，停下来先处理。
+
+> **为什么第 5、6 步值得单独列出来**：这两类问题都**不会让任何测试变红**，
+> 也不会让构建失败 —— 它们只在 GitHub 网页上表现为"一片乱码"。
+> 本项目真实发生过：`web/.gitignore` 被存成 GBK（第 5 步抓出），
+> 根 `.gitignore` 的中文注释被误解码成乱码（第 6 步抓出），
+> 而且乱码那一行还把后面的规则**注释掉了**，导致
+> `web/apps/mp/dist/` 与 `photo-fallback/` 两条忽略规则**静默失效** ——
+> 后者是照片降级目录，一旦真跑起来，运行期照片可能被提交进仓库。
+> 一个纯显示问题底下藏着一个隐私问题，靠"看起来正常"是发现不了的。
 
 ### 关于"开发口令"
 
@@ -67,25 +94,22 @@ git grep -n -I "POSTGRES_PASSWORD: [^$]" -- deploy/docker-compose.prod.yml
 
 ---
 
-## 三、发布前需要你决定/替换的四处
+## 三、发布前需要你决定/替换的（已经处理掉大部分）
 
-| # | 位置 | 要做什么 |
+本仓库现在的原则是：**发布前不留任何"必须填上用户名才能正常显示"的链接**，
+所以下面这张表里已经有两项被**彻底去掉**（不是留占位），而不是等你去替换。
+
+| # | 位置 | 现状 |
 |---|---|---|
-| 1 | `LICENSE` 末尾 `Copyright 2026 The Xjgl Authors` | 换成**真实版权人**。政务项目建议写单位 |
-| 2 | `README.md` 顶部徽章里的 `OWNER` | 换成你的 GitHub 用户名（**共 3 处**：CI 徽章那一行的两个链接 + 下方提示文字各 1 处） |
-| 3 | `.github/ISSUE_TEMPLATE/config.yml` 里的 `OWNER` | 同上（3 个链接） |
-| 4 | `.github/workflows/ci.yml` 触发分支 | 默认监听 `main` 与 `master`，按你的主分支名保留其一 |
+| 1 | `LICENSE` 末尾 `Copyright 2026 The Xjgl Authors` | **保持原样**（以项目名义发布）。若你要写具体单位，换掉这一行即可 —— 政务项目建议写单位，便于后续授权与审计追溯 |
+| 2 | `README.md` 顶部的 CI 徽章 | **已移除**。Actions 徽章地址必须含 `<账号>/<仓库>`，留着就是一个裂图。README 里给了一行注释掉的写法，推上去之后填上账号再放开 |
+| 3 | `.github/ISSUE_TEMPLATE/config.yml` 的 `contact_links` | **已移除**（那三个入口要求绝对 URL）。文件里保留了注释掉的写法；**安全漏洞上报通道不受影响** —— 仓库根有 `SECURITY.md`，GitHub 会自动在 Security 标签页展示「Report a vulnerability」 |
+| 4 | `.github/workflows/ci.yml` 触发分支 | **已收敛为只监听 `main`**。本地分支会在推送那一步用 `git branch -M main` 改名（见第四节） |
 
-一键替换（**确认无误再执行**）：
-
-```powershell
-# 把 OWNER 换成你的用户名
-(Get-ChildItem README.md, .github\ISSUE_TEMPLATE\config.yml -File) |
-  ForEach-Object {
-    $t = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8)
-    [System.IO.File]::WriteAllText($_.FullName, $t.Replace('OWNER', '<你的用户名>'), (New-Object System.Text.UTF8Encoding($false)))
-  }
-```
+> **为什么不留 `OWNER` 占位而是删掉**：占位符的失效方式是**静默**的 ——
+> README 顶上一个裂图、Issue 页三个 404，谁都不会为此报错，
+> 而读者第一眼看到的就是它。删掉之后，仓库在任何账号下都显示正常，
+> "补徽章"变成一件**可选的、有明确命令**的收尾动作，而不是一个必须记得做的前置条件。
 
 ---
 
@@ -108,7 +132,7 @@ git remote add origin https://github.com/<你的用户名>/xjgl.git
 git branch -M main
 
 # 推之前先看一眼**将要推送的文件清单**，这是最后一道人工闸门
-git ls-files | Measure-Object -Line     # 期望：约 393 个文件（含 docs/learning/ 的 50 个 md）
+git ls-files | Measure-Object -Line     # 期望：约 458 个文件（含 docs/learning/ 的 50 个 md）
 
 git push -u origin main
 ```

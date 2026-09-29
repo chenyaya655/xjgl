@@ -53,6 +53,15 @@ public sealed class PrintFontRegistry
 {
     private static readonly object SyncRoot = new();
 
+    /// <summary>
+    /// 已经向 QuestPDF 注册过字体的目录（进程级，大小写不敏感）。
+    ///
+    /// 存在的原因：本类在 DI 里是单例，但单元测试会**直接 new**（每个用例一个新实例），
+    /// 于是同一个目录会被反复注册。用这个集合把注册动作收敛成"每个目录一次"。
+    /// </summary>
+    private static readonly HashSet<string> RegisteredDirectories =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly IConfiguration _configuration;
 
     private bool _initialized;
@@ -126,10 +135,24 @@ public sealed class PrintFontRegistry
             if (!RareCharacterFontDirectory.IsNullOrWhiteSpace()
                 && Directory.Exists(RareCharacterFontDirectory))
             {
-                // QuestPDF 会自动扫描该目录下的字体文件（ttf/otf/ttc）
-                if (!QuestPDF.Settings.FontDiscoveryPaths.Contains(RareCharacterFontDirectory!))
+                // 用 FontManager.RegisterFontsFromDirectory 注册该目录下的字体
+                // （ttf / otf / ttc / pfb，含子目录；不合法的文件会被跳过）。
+                //
+                // 【为什么不用 Settings.FontDiscoveryPaths.Add】
+                //   那个属性在 QuestPDF 2026.9 起已 obsolete（原话 "has been replaced"），
+                //   官方点名的替代品就是本方法。留着它眼下虽然还能跑，但
+                //   (a) 它属于"随时可能被删掉"的写法，(b) 每台机器的构建输出里都会多一条
+                //   无关警告，而警告多了就会把真问题淹没。
+                //
+                // 【为什么要 RegisteredDirectories 这一层】
+                //   PrintFontRegistry 在 DI 里是单例，但**单元测试会直接 new 它**
+                //   （每个用例一个新实例），于是同一个目录会被注册多次。
+                //   用一个进程级集合记下"已经注册过的目录"，既避免重复扫描
+                //   （目录里几百个字体文件时这个开销并不小），
+                //   也让"注册"与"实例被创建了几次"解耦。
+                if (RegisteredDirectories.Add(RareCharacterFontDirectory!))
                 {
-                    QuestPDF.Settings.FontDiscoveryPaths.Add(RareCharacterFontDirectory!);
+                    QuestPDF.Drawing.FontManager.RegisterFontsFromDirectory(RareCharacterFontDirectory!);
                 }
 
                 RareCharacterFontAvailable = HasFontFile(RareCharacterFontDirectory!);

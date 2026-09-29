@@ -37,7 +37,26 @@ async function loadSwagger(src) {
     if (!res.ok) throw new Error(`下载 swagger 失败：HTTP ${res.status}`)
     return res.json()
   }
-  return JSON.parse(fs.readFileSync(src, 'utf8'))
+  return JSON.parse(stripBom(fs.readFileSync(src, 'utf8')))
+}
+
+/**
+ * 去掉 UTF-8 BOM。
+ *
+ * 【为什么必须有这一步】
+ *   `JSON.parse` **不认 BOM**，会直接抛
+ *   `SyntaxError: Unexpected token '﻿', "﻿{..." is not valid JSON` ——
+ *   报错指向第 1 行第 1 个字符，看起来像"swagger.json 本身是坏的"，
+ *   实际文件完全正常，只是被存成了带 BOM 的 UTF-8。
+ *
+ *   而 Windows 上按 README 操作几乎必然踩到：
+ *   `Invoke-WebRequest ... | Out-File swagger.json -Encoding utf8`
+ *   在 Windows PowerShell 5.1 里 **默认带 BOM**。
+ *   CI 用的是 `curl -o`（不带 BOM），所以这条路只有本机开发者会走到 ——
+ *   正是那种"CI 一直是绿的、只有新人第一次跑就报错"的坑。
+ */
+function stripBom(text) {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
 }
 
 const swagger = await loadSwagger(swaggerArg)

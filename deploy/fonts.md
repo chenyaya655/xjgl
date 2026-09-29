@@ -160,8 +160,9 @@ docker compose -f deploy/docker-compose.prod.yml exec api fc-list | grep -i plan
   这是 `docs/learning/25` 里那段示例代码与当前实现的差异，以代码为准。
 - ⚠ **不要轻易把 `Xjgl:Print:UseSystemFonts` 设成 `false`**：
   `appsettings.json` 的注释里写着"容器化部署建议设为 false"，但那是有前提的 ——
-  设成 false 之后 QuestPDF **只认**随应用部署的字体文件（`FontDiscoveryPaths`，
-  目前只有生僻字目录），而镜像里的 Noto 是**系统字体**，会被一起排除，
+  设成 false 之后 QuestPDF **只认**随应用部署的字体文件（自动发现目录 +
+  显式注册的目录，见 `FontManager.RegisterFontsFromDirectory`，
+  当前代码只注册了生僻字目录），而镜像里的 Noto 是**系统字体**，会被一起排除，
   结果是**常用汉字也报"字体缺少字形"**，比生僻字打不出来严重得多。
   真要用 false，必须把基字体也放进一个发现目录（当前代码没有为它留配置键）。
 

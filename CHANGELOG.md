@@ -7,13 +7,73 @@
 
 ## [未发布]
 
+### 本轮修复：开源可用性（都是"不会让测试变红"的缺陷）
+
+这一轮改动集中在同一件事上 —— **别人克隆下来能不能直接用**。
+
+- **修掉一个让整个仓库构建不过的依赖**。`SixLabors.ImageSharp` 原先引的是 **4.1.2**，
+  而 ImageSharp **4.0.0 起在 MSBuild 里强制校验商业许可**：没有
+  `SixLaborsLicenseKey` 或 `sixlabors.lic` 时，`dotnet build` 输出的是
+  **`error`，不是可以忽略的 warning**。后果是**任何克隆本仓库的人都构建不过**。
+  更糟的是 README 当时把这两条输出写成了"**两条警告，正常，不是问题**"——
+  文档在安慰一个构建已经失败的人。
+  现钉回 **3.1.12**（3.x 线最后一个不需要 key 的版本，且已在 3.x 全部 7 条
+  GitHub 漏洞公告的修复版本之上）。许可证条款本身没变（3.x/4.x 都是
+  Six Labors Split License），**变的只是"能不能构建"**。
+  依据与核对过程写在 `Directory.Build.props` 与 README「第三方许可证」一节。
+- **修掉两条静默失效的 `.gitignore` 规则**。根 `.gitignore` 的中文注释被误解码成乱码，
+  其中两行把注释与规则**挤在了同一行**，于是 `web/apps/mp/dist/` 与 `photo-fallback/`
+  实际上处于**被注释掉**的状态 —— 后者是照片降级目录，真跑起来时
+  运行期照片可能被提交进仓库。一个纯显示问题底下藏着一个隐私问题。
+  同时把 `web/.gitignore` 由 GBK 转为 UTF-8（它在 GitHub 上会整段显示成乱码）。
+  发布清单补了两条机械核对（第二节第 5、6 步）来守住这两类问题。
+- **改掉两处 QuestPDF 已废弃的 API 调用**：`Settings.FontDiscoveryPaths`
+  与 `style.Fallback(...)`（后者官方标注 "This setting is **not supported**
+  since the 2024.3 version"，而它建议的替代品 `FontFamilyFallback` 在包里并不存在）。
+  换成受支持的 `FontManager.RegisterFontsFromDirectory` 与
+  `FontFamily(主字体, 备用字体)` 候选列表。配套把那条字体测试从
+  "检查某个集合里有没有塞进路径"改成**直接问 QuestPDF：这个字体族注册上了没有**
+  （`FontManager.GetRegisteredFonts()`）—— 前者测的是中间产物，后者才是行为。
+- **README 不再依赖仓库地址**：去掉 CI 徽章（Actions 徽章地址必须含
+  `<账号>/<仓库>`，留着就是裂图），以及 `ISSUE_TEMPLATE/config.yml` 里
+  要求绝对 URL 的三个入口。**安全漏洞上报不受影响**：仓库根有 `SECURITY.md`，
+  GitHub 会自动展示上报入口。
+- **`tools/audit-routes.mjs` 容忍 UTF-8 BOM**：Windows 上按 README 用
+  `Invoke-WebRequest ... | Out-File swagger.json -Encoding utf8` 会写出 BOM，
+  而 `JSON.parse` 不认它，报错指向"swagger.json 第 1 行"（文件其实完全正常）。
+  CI 用 `curl -o` 不带 BOM，所以这条只有本机开发者会踩到。
+
+### 本轮修复：端到端测试与 CI（两条都是"CI 会红、但看不出为什么"）
+
+- **CI 的 e2e job 补上了演示种子**。`90-demo-walkthrough` 与 `91-role-management`
+  两份 spec **硬依赖**演示账号（`demo-prov-990000` / `Demo@Xjgl2026`，写在各自文件头部），
+  而 CI 的 e2e job 从来没开过 `Xjgl__DemoData__Enabled` —— 迁移器只建组织与预置名单、
+  **不建任何可登录账号**。那两条用例会卡在登录页，报错是
+  `waitForURL('**/dashboard')` 超时，看起来像"前端没跳转"，
+  而根因是"库里根本没有这个账号"。
+  现在 job 里显式注入 `Xjgl__DemoData__Enabled=true` 与演示口令
+  （口令与 `deploy/README.md`、`SECURITY.md` 里公开的那一个一致）。
+- **修掉角色管理用例里被新增弹窗打坏的选择器**。`91-role-management.spec.ts` 里
+  「等新建角色弹窗关闭」用的是 `page.locator('.el-overlay-dialog')`。
+  角色管理页后来加了第二个弹窗（「数据范围」），Element Plus 会给两者都渲染
+  `role="dialog"` 的 `.el-overlay-dialog` 容器，于是这个通配选择器同时匹配 2 个元素 ——
+  Playwright 的 strict mode **在判断可见性之前就报错**，
+  现象是"弹窗明明关了却一直等不到隐藏"。
+  现在改成按可访问名定位：`page.getByRole('dialog', { name: '新建角色' })`。
+
 ### 待做
+
 剩下的都是**明确列出来**的，不在代码里藏着：见 [`ROADMAP.md`](ROADMAP.md)。
-当前仍未做的主要有：用户账号导入导出（`Sys.User.Import/Export`）、
-数据范围「自定义组织集合」（多根路径谓词）、权限定义热加载（新增模块需重启）、
-CSV 导入的分批与进度、导出百分比、事件总线的事件源（Outbox 目前没有生产者）、
-K8s 实机验证、在线 Demo。**微信小程序登录与教育系统内 SSO 明确不做**
-（需要真实环境才能验证，不做"看起来有"的功能）。
+当前仍未做的主要有：**跨 ORM 写操作的原子性**（ROADMAP 第 1 条）、
+权限定义热加载 —— 新增模块仍需重启（第 2 条）、生产量级压测（第 6 条）、
+数据范围「自定义组织集合」多根路径谓词（第 21 条）、
+组织 / 微代码 / CSV 导入的分批与进度、K8s 实机验证（第 14 条）、在线 Demo（第 16 条）。
+
+明确**不做**或**刻意不做**的：用户账号**导入**（`Sys.User.Export` 已实现，
+导入刻意不做，理由见 ROADMAP 第 17 条末尾）、微信小程序登录与教育系统内 SSO
+（需要真实环境才能验证，不做"看起来有"的功能）、接入 BPMN 引擎、多租户、
+把 RabbitMQ 接上但无消费方。事件总线**已接好 Outbox**，但应用目前**不发布任何事件**
+（即"没有生产者"），所以 Outbox 链路目前只在测试里被驱动。
 
 ---
 

@@ -1,12 +1,18 @@
 # 河南省学籍管理系统（Xjgl）
 
-[![CI](https://github.com/OWNER/xjgl/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/xjgl/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/)
 [![ABP](https://img.shields.io/badge/ABP-10.6-1B9AAA.svg)](https://abp.io/)
 
-> ⚠️ **仓库地址占位**：上面的 `OWNER` 要换成你的 GitHub 用户名（徽章与克隆地址共 3 处）。
-> 见 [`docs/GitHub发布清单.md`](docs/GitHub发布清单.md) 第三节。
+> **为什么这里没有 CI 徽章**：GitHub Actions 的徽章地址必须写成
+> `https://github.com/<账号>/<仓库>/actions/workflows/ci.yml/badge.svg`，
+> 也就是说它**必须**知道仓库最终挂在谁的账号下。本仓库在发布前刻意不含任何
+> 需要填用户名才能显示的链接（免得读者看到一个裂图）。
+> 你把仓库推上去之后，把下面这一行取消注释、填上自己的账号即可：
+>
+> ```markdown
+> [![CI](https://github.com/<账号>/xjgl/actions/workflows/ci.yml/badge.svg)](https://github.com/<账号>/xjgl/actions/workflows/ci.yml)
+> ```
 
 面向 **省 → 市 → 县区 → 学校** 四级教育行政体系的学籍管理系统，全省统一部署、统一入口登录。
 
@@ -141,27 +147,45 @@ corepack pnpm@9.15.0 --filter @xjgl/pc dev     # http://127.0.0.1:5173
 
 ---
 
-## 构建时会看到的两条警告（正常，不是问题）
+## 第三方许可证：两处需要采购时确认
 
-第一次 `dotnet build` 会输出两条来自 **ImageSharp** 的提示：
-
-```
-warning : No Six Labors license found. Set $(SixLaborsLicenseKey) ...
-warning : Please obtain a license from https://sixlabors.com/pricing/
-```
-
-**这是 ImageSharp 4.x 的商业许可声明，不是代码缺陷。** 说明一下，因为政务/企业采购
-时一定会被问到：
+`dotnet build` **开箱即过，不需要任何许可证 key**。但下面两个依赖的许可证条款
+需要政务/企业采购知情 —— 它们都不是 Apache/MIT 这类无条件许可：
 
 | 依赖 | 许可证 | 什么时候需要付费 | 怎么替换 |
 |---|---|---|---|
-| **SixLabors.ImageSharp** 4.x | Six Labors Split License | 组织年收入 **≥ 100 万美元**时需购买商业许可 | 只需改 `src/Xjgl.Imaging/`（应用层依赖 `IImageProcessor` 接口） |
+| **SixLabors.ImageSharp** 3.1.x | Six Labors Split License | 组织年收入 **≥ 100 万美元**时需购买商业许可 | 只需改 `src/Xjgl.Imaging/`（应用层依赖 `IImageProcessor` 接口） |
 | **QuestPDF**（学籍卡/花名册） | QuestPDF Community License | 同上（年收入 ≥ 100 万美元） | 只需改 `src/Xjgl.Reporting/`（应用层依赖两个渲染接口） |
 
 - 小型组织、个人、非营利用途**可以免费使用**；
-- 有商业许可时，把 key 放进 `SixLaborsLicenseKey` 属性或项目根放 `sixlabors.lic` 即可消除警告；
 - 两个依赖都被**隔离在独立项目 + 接口**后面，替换成本是改一个项目 + 跑测试，
-  不需要动业务代码 —— 这是刻意的架构选择。
+  不需要动业务代码 —— 这是刻意的架构选择；
+- QuestPDF 需要在代码里声明许可证等级，本项目已在 `PrintFontRegistry` 里声明为
+  `LicenseType.Community`。
+
+### ⚠ 为什么 ImageSharp 必须钉在 3.1.x（不要升 4.x）
+
+ImageSharp 从 **4.0.0 起在 MSBuild 里强制校验商业许可**（包内多了
+`build/SixLabors.ImageSharp.targets` 与 `SixLabors.Licensing.dll`）。
+没有 `SixLaborsLicenseKey` 或 `sixlabors.lic` 时，`dotnet build` 是
+**`error`，不是可以忽略的 `warning`**：
+
+```
+error : No Six Labors license found. Set $(SixLaborsLicenseKey), set $(SixLaborsLicenseFile),
+        or add a 'sixlabors.lic' file to the project/workspace.
+error : Please obtain a license from https://sixlabors.com/pricing/
+```
+
+也就是说升到 4.x 后，**任何克隆本仓库的人都构建不过** —— 对一个"拿来就能用/就能读"
+的仓库这是致命的。3.1.12 没有这套校验，`dotnet build` 开箱即过。
+
+版本选择同时核对过已知漏洞：GitHub Advisory 中 3.x 线影响面最高的一条是
+`>= 3.0.0, < 3.1.11`（GHSA-rxmq-m78w-7wmc，GIF 解码死循环），
+**3.1.12 已在全部 7 条已知公告的修复版本之上**。
+
+> 注意：钉 3.1.x 改变的是**能不能构建**，不是**要不要付费** ——
+> 3.x 与 4.x 的许可证条款相同（都是 Six Labors Split License）。
+> 要彻底去掉这个许可问题，就得换掉实现（业务层只依赖 `IImageProcessor`）。
 
 ---
 
@@ -360,7 +384,8 @@ docs/                          设计与交付文档（含 learning/ 学习文�
 12. **PDF 渲染用 QuestPDF 社区版**（年收入 100 万美元以下组织免费，已在代码里声明）。
     商用需自行购买许可证；替换为其它渲染库时只需改 `Xjgl.Reporting`，
     应用层依赖的是 `IStudentCardPdfRenderer` / `IStudentRosterPdfRenderer` 两个接口。
-    同理，**图像处理用 ImageSharp 4.x**（Six Labors Split License，开源/小微组织免费），
+    同理，**图像处理用 ImageSharp 3.1.x**（Six Labors Split License，开源/小微组织免费；
+    **不要升到 4.x**，4.x 会在构建期强制要求商业许可 key，见上文「第三方许可证」一节），
     替换只需改 `Xjgl.Imaging`（应用层依赖 `IImageProcessor`）。
 13. ~~**老照片没有缩略图**~~ **已补上后台回填**：`PhotoThumbnailService` +
     `PhotoThumbnailWorker`（`src/Xjgl.Application/Photos/`、`src/Xjgl.HttpApi.Host/Photos/`）

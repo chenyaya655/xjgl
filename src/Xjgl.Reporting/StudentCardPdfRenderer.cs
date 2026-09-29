@@ -38,12 +38,29 @@ public sealed class StudentCardPdfRenderer : IStudentCardPdfRenderer
                 page.Margin(1.4f, Unit.Centimetre);
                 page.DefaultTextStyle(style =>
                 {
-                    var text = style.FontSize(10.5f).FontFamily(_fonts.DefaultFontFamily);
-
-                    // 生僻字备用字体：某个字形在主字体里找不到时，QuestPDF 会退到这里找
+                    // 生僻字备用字体：把「主字体 + 备用字体」作为一个**字体族候选列表**
+                    // 一起传给 FontFamily（`params string[]`），某个字形在主字体里找不到时
+                    // QuestPDF 会依次往后找。
+                    //
+                    // ⚠ **不要用 `style.Fallback(x => x.FontFamily(...))`**：
+                    //   该 API 已被 QuestPDF 标记为 obsolete，原文是
+                    //   "This setting is **not supported** since the 2024.3 version"，
+                    //   也就是**官方明确说这个写法不再被支持**。这类"不受支持的设置"
+                    //   通常表现为**静默无效**：不报错，但也起不到回落作用 ——
+                    //   而主字体一旦真的缺字形，就会直接撞上下面那条
+                    //   `ThrowOnMissingTextGlyphs`（宁可报错也不出方块）。
+                    //   因此这里按官方点名的方向改用"候选列表"。
+                    //
+                    //   顺带记一条：obsolete 提示里建议的替代品 `FontFamilyFallback`
+                    //   在包里**并不存在** —— 整个 QuestPDF.dll 里这个字符串只出现在
+                    //   那条提示自己里面（按成员名去查，一个都查不到）。
+                    //   真正被支持的就是下面这种写法，依据是
+                    //   `Settings.ThrowOnMissingFontFamilies` 的文档：
+                    //   "the text is rendered with the first available font family
+                    //    from the **fallback list**"。
                     return _fonts.RareCharacterFontFamily == null
-                        ? text
-                        : text.Fallback(fallback => fallback.FontFamily(_fonts.RareCharacterFontFamily));
+                        ? style.FontSize(10.5f).FontFamily(_fonts.DefaultFontFamily)
+                        : style.FontSize(10.5f).FontFamily(_fonts.DefaultFontFamily, _fonts.RareCharacterFontFamily);
                 });
 
                 page.Content().Column(col =>

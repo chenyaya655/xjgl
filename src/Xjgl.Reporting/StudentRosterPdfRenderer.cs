@@ -40,11 +40,12 @@ public sealed class StudentRosterPdfRenderer : IStudentRosterPdfRenderer
                 page.Margin(1f, Unit.Centimetre);
                 page.DefaultTextStyle(style =>
                 {
-                    var text = style.FontSize(9).FontFamily(_fonts.DefaultFontFamily);
-
+                    // 与学籍卡同一处取舍（理由与依据详见 StudentCardPdfRenderer）：
+                    // 备用字体走 FontFamily 的候选列表，**不要用已 obsolete 且不生效的
+                    // `style.Fallback(...)`**。
                     return _fonts.RareCharacterFontFamily == null
-                        ? text
-                        : text.Fallback(fallback => fallback.FontFamily(_fonts.RareCharacterFontFamily));
+                        ? style.FontSize(9).FontFamily(_fonts.DefaultFontFamily)
+                        : style.FontSize(9).FontFamily(_fonts.DefaultFontFamily, _fonts.RareCharacterFontFamily);
                 });
 
                 page.Header().Column(header =>

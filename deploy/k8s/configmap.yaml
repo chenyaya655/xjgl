@@ -77,7 +77,8 @@ data:
   # ---- 打印字体 ----
   # 中文字体随镜像安装（fonts-noto-cjk，见 api.Dockerfile）。
   # UseSystemFonts 保持 true 才能用到它 —— 设成 "false" 之后 QuestPDF **只认**
-  # 随应用部署的字体文件（FontDiscoveryPaths 里目前只有生僻字目录），
+  # 随应用部署的字体文件（自动发现目录 + 代码里用
+  # FontManager.RegisterFontsFromDirectory 显式注册的目录，目前只有生僻字目录），
   # 镜像里的 Noto 是"系统字体"，会被一起排除，结果是**常用汉字也报缺字形**。
   # 真要用 false，必须把基字体也放进一个发现目录。
   Xjgl__Print__DefaultFontFamily: "Noto Sans CJK SC"

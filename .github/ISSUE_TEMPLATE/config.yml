@@ -1,11 +1,29 @@
+# Issue 选择页配置。
+#
+# 【为什么这里没有 contact_links】
+#   那一节要求每个入口写**绝对 URL**，而绝对 URL 必须包含仓库挂在哪个账号下
+#   （`https://github.com/<账号>/xjgl/...`）。本仓库在发布前刻意不写死这个账号，
+#   否则读者会看到三个 404 链接。
+#
+#   三个模板本身（缺陷 / 功能建议 / 部署问题）照样能用 —— 它们就在本目录下，
+#   GitHub 会自动列出来。
+#
+# 【想把这些快捷入口加回来】
+#   把账号填进去、取消下面的注释即可（这是发布后的一次性动作）：
+#
+#   contact_links:
+#     - name: 我想先把系统跑起来（不是缺陷）
+#       url: https://github.com/<账号>/xjgl#快速开始
+#       about: 部署/环境问题请走「部署 / 环境问题」模板；这里只是快速开始文档。
+#     - name: 我想看还没做的事
+#       url: https://github.com/<账号>/xjgl/blob/main/ROADMAP.md
+#       about: 待办已按「难度 × 影响面」拆成可认领的条目，含一节明确的「非目标（不做）」。
+#     - name: 安全漏洞
+#       url: https://github.com/<账号>/xjgl/blob/main/SECURITY.md
+#       about: 请不要开公开 Issue，按 SECURITY.md 的方式私下报告。
+#
+#   注意：安全漏洞的私下上报通道**不依赖**上面这段配置 ——
+#   只要仓库根有 SECURITY.md，GitHub 就会在 Security 标签页与新建 Issue 页
+#   自动展示「Report a vulnerability」。所以删掉 contact_links 不会让人无处上报。
+
 blank_issues_enabled: true
-contact_links:
-  - name: 我想先把系统跑起来（不是缺陷）
-    url: https://github.com/OWNER/xjgl#快速开始
-    about: 部署/环境问题请走「部署 / 环境问题」模板；这里只是快速开始文档。
-  - name: 我想看还没做的事
-    url: https://github.com/OWNER/xjgl/blob/main/ROADMAP.md
-    about: 待办已按「难度 × 影响面」拆成可认领的条目，含一节明确的「非目标（不做）」。
-  - name: 安全漏洞
-    url: https://github.com/OWNER/xjgl/blob/main/SECURITY.md
-    about: 请不要开公开 Issue，按 SECURITY.md 的方式私下报告。

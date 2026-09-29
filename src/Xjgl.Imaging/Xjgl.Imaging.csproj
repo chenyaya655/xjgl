@@ -9,7 +9,10 @@
     <!--
       ImageSharp 是**纯托管**实现（不需要 libgdiplus / SkiaSharp），
       因此在 Windows 与 Linux 容器里的行为一致。
-      许可证是 Six Labors Split License：开源项目与年收入 100 万美元以下的组织免费，
+
+      ⚠ 版本**钉在 3.1.x**：4.0.0 起包内带 MSBuild 许可校验，没有商业许可 key
+      会让 `dotnet build` 直接报 error（详见根目录 Directory.Build.props 的说明）。
+      许可证是 Six Labors Split License：开源项目与年收入 < 100 万美元的组织免费，
       商用需自行购买 —— 与 QuestPDF 同类，替换实现只需改本项目。
     -->
     <PackageReference Include="SixLabors.ImageSharp" Version="$(ImageSharpVersion)" />
