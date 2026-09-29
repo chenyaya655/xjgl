@@ -1,4 +1,7 @@
 using Shouldly;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using Volo.Abp;
 using Xjgl.Organizations;
 using Xjgl.Photos;
@@ -113,18 +116,45 @@ public class PhotoAppServiceTests : XjglIntegrationTestBase
             }));
     }
 
-    private static byte[] JpegBytes(int size = 512, int seed = 0)
+    /// <summary>
+    /// 造一张**真实可解码**的 JPEG，字节由 <paramref name="seed"/> 决定。
+    ///
+    /// 【为什么不再用"随机字节 + JPEG 魔数"】
+    /// 那种合成内容解码不了。上传链路加了"内容必须是真图片"的校验之后，
+    /// 它会被一律拒收，于是所有依赖它的用例都会失败 —— 而且失败原因
+    /// （"文件内容不是可识别的图片"）看上去与用例本意（秒传、降级、台账）毫无关系。
+    ///
+    /// 同 seed 必须出**完全相同**的字节：「同一张图重复上传走秒传」那条用例靠它；
+    /// 不同 seed 必须出**不同**字节：「内容变了不该被判秒传」那条靠它。
+    /// 所以宽高与颜色都由 seed 推导，且必须是确定性的（不能引入时间/随机源）。
+    /// </summary>
+    private static byte[] JpegBytes(int seed = 0)
     {
-        var bytes = new byte[size];
-        new Random(seed).NextBytes(bytes);
+        var width = 8 + seed % 8;
+        var height = 8 + seed / 8 % 8;
 
-        // 给一个 JPEG 魔数，方便人工排查时能认出是图片
-        bytes[0] = 0xFF;
-        bytes[1] = 0xD8;
-        bytes[2] = 0xFF;
-        bytes[3] = 0xE0;
+        // 直接用 Rgba32 索引器逐像素填色，而不是 Color.* 的便捷 API：
+        // 那些便捷方法在不同 ImageSharp 大版本间改过名（v4 就没有 Color.FromRgb），
+        // 而像素索引器是稳定的，测试不该被图像库的 API 变动牵连。
+        var pixel = new Rgba32(
+            (byte)(seed * 37 % 251),
+            (byte)(seed * 91 % 251),
+            (byte)(seed * 53 % 251));
 
-        return bytes;
+        using var image = new Image<Rgba32>(width, height);
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                image[x, y] = pixel;
+            }
+        }
+
+        using var buffer = new MemoryStream();
+        image.SaveAsJpeg(buffer);
+
+        return buffer.ToArray();
     }
 
     private static PhotoUploadRequest Request(Guid studentId, byte[] content, string fileName = "photo.jpg") =>
@@ -148,8 +178,10 @@ public class PhotoAppServiceTests : XjglIntegrationTestBase
         var school = await CreateSchoolAsync();
         var student = await CreateStudentAsync(school.Id);
 
+        var content = JpegBytes(seed: 1);
+
         var result = await _uploadService.UploadOneAsync(
-            Request(student.Id, JpegBytes(seed: 1)));
+            Request(student.Id, content));
 
         result.Success.ShouldBeTrue();
         result.Degraded.ShouldBeFalse();
@@ -164,7 +196,14 @@ public class PhotoAppServiceTests : XjglIntegrationTestBase
         photo.StudentId.ShouldBe(student.Id);
         photo.Status.ShouldBe(PhotoStatuses.Normal);
         photo.StatusText.ShouldBe("正常");
-        photo.FileSize.ShouldBe(512);
+
+        // ⚠ 这一条原来写的是 `ShouldBe(512)` 这个**魔法数字**。
+        // JPEG 的具体字节数由 ImageSharp 的编码器决定（它随版本变化），
+        // 而本用例真正要断言的是"台账登记的大小 == 实际存进去的字节数"。
+        // 写死 512 的表现是：升级图像库后此用例开始失败，而失败信息
+        // （FileSize 应为 512、实际 616）看起来像是业务算错了大小，
+        // 排查方向完全被带偏。断言"与自己上传的字节数一致"才是有意义的。
+        photo.FileSize.ShouldBe(content.Length, "台账里的文件大小必须等于实际写入的字节数");
         photo.FileHash.Length.ShouldBe(64);
         photo.BatchId.ShouldNotBe(Guid.Empty);
 
@@ -311,7 +350,7 @@ public class PhotoAppServiceTests : XjglIntegrationTestBase
     public async Task 超过单批上限_抛业务异常()
     {
         var requests = Enumerable.Range(0, PhotoUploadService.MaxBatchSize + 1)
-            .Select(_ => Request(Guid.NewGuid(), JpegBytes(16)))
+            .Select(_ => Request(Guid.NewGuid(), JpegBytes()))
             .ToList();
 
         var exception = await Should.ThrowAsync<UserFriendlyException>(

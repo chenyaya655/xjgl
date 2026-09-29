@@ -177,4 +177,71 @@ public class UserDataScopeTests
         noOrg.AllowsEntityPath(SchoolAPath).ShouldBeFalse();
         noOrg.AllowsRequestedOrgPath(SchoolAPath).ShouldBeFalse();
     }
+
+    // ------------------------------------------------------------------
+    // 角色上配置的范围怎么合并（ROADMAP 第 9 条）
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void 没有配置任何范围_返回null表示沿用层级推导()
+    {
+        DataScopes.ResolveEffective(null).ShouldBeNull();
+        DataScopes.ResolveEffective(Array.Empty<string>()).ShouldBeNull();
+        DataScopes.ResolveEffective(new[] { "", "  " }).ShouldBeNull("空白不算配置");
+    }
+
+    [Fact]
+    public void 单个配置_原样返回()
+    {
+        DataScopes.ResolveEffective(new[] { DataScopes.OrgOnly }).ShouldBe(DataScopes.OrgOnly);
+        DataScopes.ResolveEffective(new[] { DataScopes.SelfOnly }).ShouldBe(DataScopes.SelfOnly);
+    }
+
+    /// <summary>
+    /// 多个角色都配了范围时取**最宽**（与权限的加法语义一致）。
+    ///
+    /// 取最窄会导致一件无法解释的事：给某人加一个"全省"的角色，他反而看得更少。
+    /// 这条用例把方向钉死，避免以后有人"从安全角度"把它翻过来。
+    /// </summary>
+    [Fact]
+    public void 多个角色_取最宽的那个()
+    {
+        DataScopes.ResolveEffective(new[] { DataScopes.SelfOnly, DataScopes.OrgOnly })
+            .ShouldBe(DataScopes.OrgOnly);
+
+        DataScopes.ResolveEffective(new[] { DataScopes.OrgOnly, DataScopes.OrgAndChildren })
+            .ShouldBe(DataScopes.OrgAndChildren);
+
+        DataScopes.ResolveEffective(new[] { DataScopes.OrgAndChildren, DataScopes.All })
+            .ShouldBe(DataScopes.All);
+
+        // 顺序无关
+        DataScopes.ResolveEffective(new[] { DataScopes.All, DataScopes.SelfOnly })
+            .ShouldBe(DataScopes.All);
+    }
+
+    /// <summary>
+    /// 认不出来的范围**必须收紧**，不能放行。
+    ///
+    /// `Custom`（自定义组织集合）目前不支持配置：各查询的 SQL 谓词按"单一根路径"生成，
+    /// 落不了多个根。若把它当成"未知就忽略"，它会退化成调用方按层级推导的范围 ——
+    /// 那可能**比配置更宽**。所以未知值一律按"仅本级"收口。
+    /// </summary>
+    [Fact]
+    public void 未启用或未知的范围_按仅本级收口()
+    {
+        DataScopes.ResolveEffective(new[] { DataScopes.Custom }).ShouldBe(DataScopes.Custom);
+
+        // Custom 与"仅本级"并列时，两者排名相同（2），先出现的胜出 —— 都不会更宽
+        DataScopes.ResolveEffective(new[] { DataScopes.Custom, DataScopes.OrgOnly })
+            .ShouldBe(DataScopes.Custom);
+
+        // 关键断言：未知值与"本级及下级"并列时，不会因为认不出来就放宽到"本级及下级"
+        DataScopes.ResolveEffective(new[] { "SomethingElse", DataScopes.OrgAndChildren })
+            .ShouldBe(DataScopes.OrgAndChildren);
+
+        DataScopes.IsConfigurable(DataScopes.Custom).ShouldBeFalse("Custom 暂不可配置");
+        DataScopes.IsConfigurable(DataScopes.OrgOnly).ShouldBeTrue();
+        DataScopes.IsConfigurable("SomethingElse").ShouldBeFalse();
+    }
 }

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { moduleApi } from '@/api'
 import type { ModuleAction, Subsystem, SysModule } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 
@@ -148,7 +149,16 @@ const form = reactive({
 
 const currentPermission = ref('')
 
-const actionTypeOptions = ['Query', 'Create', 'Update', 'Delete', 'Import', 'Export', 'Print', 'Assign', 'Approve', 'RevokeApprove', 'Upload', 'Compensate']
+/**
+ * 操作类型下拉项**来自码表**（ACTION_TYPE）。
+ *
+ * 这里原来是一份手写的数组，而且**已经与码表漂移了**：
+ * 手写的有 `Assign` / `Compensate`、缺 `Download`；
+ * 码表里有 `Download`、缺那两个。两边各写一份，谁也不报错，
+ * 表现是"某个操作的 ActionType 在编辑时下拉里根本选不到，保存后显示为空"。
+ * 现在码表补齐为超集（见 `CodeDataSeedContributor` 的 ACTION_TYPE），前端只管取。
+ */
+const actionTypeCodes = useCodeOptions(CodeCategories.ActionType)
 
 function selectNode(node: TreeNode): void {
   selectedKind.value = node.kind
@@ -399,6 +409,9 @@ async function doCreate(): Promise<void> {
 
 onMounted(() => {
   void load()
+
+  // 操作类型码表：失败不阻塞（下拉为空，但元数据树/表单其它字段照常）
+  void actionTypeCodes.load()
 })
 </script>
 
@@ -529,7 +542,12 @@ onMounted(() => {
                   <el-col :span="12">
                     <el-form-item label="操作类型">
                       <el-select v-model="form.actionType" style="width: 100%">
-                        <el-option v-for="t in actionTypeOptions" :key="t" :label="t" :value="t" />
+                        <el-option
+                          v-for="t in actionTypeCodes.options.value"
+                          :key="t.value"
+                          :label="t.label"
+                          :value="t.value"
+                        />
                       </el-select>
                     </el-form-item>
                   </el-col>

@@ -1,0 +1,38 @@
+# 河南省学籍管理系统 —— API（Service）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 为什么名字必须叫 `api`
+#
+# compose 里的 nginx 配置写的是 `proxy_pass http://api:8080`（deploy/nginx.conf），
+# 它靠的是 compose 的服务名解析。搬到 K8s 之后，web 容器里的 nginx 仍然要有
+# 一个叫 `api` 的名字能解析 —— 靠的就是这个 Service 名（集群 DNS 会给
+# `api.xjgl.svc.cluster.local` 注册，并且同命名空间下短名 `api` 也能解析）。
+#
+# ⚠ 因此**不要**把它改名成 `xjgl-api` 之类：那样 web Pod 里的 nginx 会在启动时
+#   解析失败，症状是"前端静态页能打开、所有接口 502"，而这个报错完全指不到
+#   "Service 改名了"。要么保持 `api`，要么同时改 deploy/nginx.conf（不建议，
+#   那会让 compose 与 K8s 两套部署的 nginx 配置分叉）。
+#
+# 【为什么不需要 sessionAffinity】
+# 会话状态在数据库（OpenIddict 表）与共享的 DataProtection 密钥环里，
+# 不依赖粘性会话。**不要**为了"解决登录问题"打开 sessionAffinity：
+# 它只会掩盖真正的配置错误（deploy/README.md 第 11.2 节的第 1 行）。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app: xjgl-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

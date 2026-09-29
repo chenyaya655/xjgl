@@ -29,6 +29,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
 
     private readonly IXjglRepository<SysUserPredefine> _predefines;
     private readonly IXjglRepository<SysOrg> _orgs;
+    private readonly IUserDataScopeProvider _dataScope;
     private readonly IdentityUserManager _userManager;
     private readonly IdentityRoleManager _roleManager;
     private readonly IStringEncryptionService _stringEncryptionService;
@@ -38,6 +39,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     public UserProvisionAppService(
         IXjglRepository<SysUserPredefine> predefines,
         IXjglRepository<SysOrg> orgs,
+        IUserDataScopeProvider dataScope,
         IdentityUserManager userManager,
         IdentityRoleManager roleManager,
         IStringEncryptionService stringEncryptionService,
@@ -46,6 +48,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     {
         _predefines = predefines;
         _orgs = orgs;
+        _dataScope = dataScope;
         _userManager = userManager;
         _roleManager = roleManager;
         _stringEncryptionService = stringEncryptionService;
@@ -60,6 +63,36 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     [Authorize(MetadataPermissions.Sys.UserProvision.Query)]
     public async Task<PagedResultDto<PredefineUserDto>> GetListAsync(PredefineUserQueryDto input)
     {
+        // ── 数据范围必须先于一切条件生效 ──
+        //
+        // 【修的是什么】此前只有"传了 OrgId"才会去解析范围；不传 OrgId 时谓词为 null，
+        //   即**不加任何 where**。于是一个县区管理员只要不带 OrgId 列表，
+        //   就能看到**全系统**的预置记录（含手机号与身份证摘要）—— 这是实打实的越权读取。
+        //
+        // 【为什么范围外返回空页而不是报错】这是分页查询接口，调用方传了范围外的 OrgId
+        //   时返回空页，与"该范围内确实没数据"表现一致；报错会把前端的筛选交互
+        //   变成一堆红色提示，而用户只是换了个学校下拉。
+        var scope = await _dataScope.GetAsync();
+
+        if (scope.IsEmpty)
+        {
+            return new PagedResultDto<PredefineUserDto>(0, new List<PredefineUserDto>());
+        }
+
+        // 不受限（省厅 / admin）时传 null，等于不加范围条件
+        var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
+
+        // ★ 「仅本级」必须把"后代"这一半**关掉**：换成一个不可能出现的前缀，
+        //   让 StartsWith 永不命中，只剩"路径完全相等"生效。
+        //
+        //   这里原先直接用了 `scopePathCode + "."`，等于**无论什么范围都按"本级及下级"处理** ——
+        //   于是给角色配了「仅本级」之后，预置名单照旧能看到下属县的人。
+        //   这个方向的错误最危险：它是**放宽**可见性（管理员以为收紧了），而且不报错。
+        //   （集成测试 `市局配置为仅本级_看得到本局预置名单_看不到下属县的` 抓到的就是它。）
+        var scopeChildPrefix = scopePathCode == null
+            ? null
+            : (scope.Scope == DataScopes.OrgOnly ? DataScopes.ImpossiblePathPrefix : scopePathCode + ".");
+
         // 先按组织范围解析出路径前缀；为空表示不限组织
         string? pathPrefix = null;
         if (input.OrgId.HasValue)
@@ -75,15 +108,32 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
             if (!input.IncludeDescendantOrgs)
             {
                 var list = await _predefines.GetSortedListAsync(
-                    BuildPredicate(input, null, org.PathCode), input.Sorting ?? "CreationTime DESC");
+                    BuildPredicate(input, null, org.PathCode, scopePathCode, scopeChildPrefix),
+                    input.Sorting ?? "CreationTime DESC");
                 var total = list.Count;
                 return new PagedResultDto<PredefineUserDto>(
                     total,
                     list.Skip(input.SkipCount).Take(input.MaxResultCount).Select(ToDto).ToList());
             }
+
+            // 「含下级」= 整棵子树，**包含该组织自己**：把 exactPathCode 一起传下去，
+            // 谓词里与"后代前缀"按"或"处理。只传前缀会把本级建的记录排除掉 ——
+            // 而本级恰恰是市局/省厅自己建的账号，现象是"刚建完就查不到"。
+            var subtreePredicate = BuildPredicate(input, pathPrefix, org.PathCode, scopePathCode, scopeChildPrefix);
+
+            var subtreeItems = await _predefines.GetPagedListAsync(
+                subtreePredicate,
+                input.Sorting ?? "CreationTime DESC",
+                input.SkipCount,
+                input.MaxResultCount);
+
+            var subtreeCount = await _predefines.GetCountAsync(subtreePredicate);
+
+            return new PagedResultDto<PredefineUserDto>(
+                subtreeCount, subtreeItems.Select(ToDto).ToList());
         }
 
-        var predicate = BuildPredicate(input, pathPrefix, null);
+        var predicate = BuildPredicate(input, pathPrefix, null, scopePathCode, scopeChildPrefix);
 
         var items = await _predefines.GetPagedListAsync(
             predicate,
@@ -361,6 +411,28 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         var org = await _orgs.FindAsync(input.OrgId)
                   ?? throw new BusinessException(XjglDomainErrorCodes.OrgNotFound);
 
+        // ── 逐级建用户：只能给自己范围内的组织建用户 ──
+        //
+        // 【修的是什么】在此之前这里**没有任何范围校验**：任何拿到 Sys.UserProvision.Create
+        //   权限的人都能给任意组织建预置用户 —— 一个县区管理员可以直接给别的市、甚至
+        //   别的省建账号。权限回答"能不能建用户"，范围才回答"能给谁建"。
+        //
+        // 【为什么用 AllowsEntityPath 而不是 AllowsRequestedOrgPath】
+        //   后者**故意放行"请求的是我的上级"**（见 UserDataScope 注释：县区管理员要按市
+        //   筛选统计时会传市 Id）。那是给**查询过滤**用的，前提是实体层再叠一层范围约束。
+        //   照搬到建用户上就会开一个洞：市级用户传省级组织 Id 会被判为"有交集"而放行，
+        //   结果就是**市级能给省级建用户** —— 与"逐级"正好相反。
+        //   AllowsEntityPath 的语义才是这里要的：不受限放行、本级及下级限自身与后代、
+        //   仅本级只限自身、无范围一律拒绝。
+        var scope = await _dataScope.GetAsync();
+
+        if (!scope.AllowsEntityPath(org.PathCode))
+        {
+            throw new BusinessException(XjglDomainErrorCodes.UserNotInDataScope)
+                .WithData("row", rowIndex)
+                .WithData("reason", $"组织「{org.Name}」不在你的数据范围内，只能给本级及下级组织建用户");
+        }
+
         var entity = new SysUserPredefine(
             GuidGenerator.Create(),
             realName,
@@ -394,7 +466,9 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     private System.Linq.Expressions.Expression<Func<SysUserPredefine, bool>>? BuildPredicate(
         PredefineUserQueryDto input,
         string? descendantPrefix,
-        string? exactPathCode)
+        string? exactPathCode,
+        string? scopePathCode,
+        string? scopeChildPrefix)
     {
         var hasKeyword = !input.Keyword.IsNullOrWhiteSpace();
         var keyword = input.Keyword?.Trim();
@@ -402,8 +476,13 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         var status = input.Status;
         var hasDescendant = !descendantPrefix.IsNullOrWhiteSpace();
         var hasExact = !exactPathCode.IsNullOrWhiteSpace();
+        var hasOrgFilter = hasDescendant || hasExact;
+        var hasScope = !scopePathCode.IsNullOrWhiteSpace();
+        var hasScopeChildPrefix = !scopeChildPrefix.IsNullOrWhiteSpace();
 
-        if (!hasKeyword && !hasStatus && !hasDescendant && !hasExact)
+        // hasScope 必须参与这个判断：否则"不带任何筛选条件"的请求会拿到 null 谓词，
+        // 也就是**不加任何 where** —— 那正是范围泄露的入口。
+        if (!hasKeyword && !hasStatus && !hasOrgFilter && !hasScope)
         {
             return null;
         }
@@ -411,8 +490,18 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return p =>
             (!hasKeyword || p.RealName.Contains(keyword!) || p.PhoneNumber.Contains(keyword!)) &&
             (!hasStatus || p.Status == status) &&
-            (!hasDescendant || (p.OrgPathCode != null && p.OrgPathCode.StartsWith(descendantPrefix!))) &&
-            (!hasExact || (exactPathCode == null || p.OrgPathCode == exactPathCode));
+            // 组织条件：本级（路径相等）与后代（前缀匹配）是**或**的关系。
+            // 「含下级」的语义是"整棵子树"，包含根自己 —— 两个 AND 会把本级漏掉，
+            // 而本级正是市局/省厅自己建的账号，现象是"刚建完就查不到"。
+            (!hasOrgFilter
+             || (hasExact && p.OrgPathCode == exactPathCode)
+             || (hasDescendant && p.OrgPathCode != null && p.OrgPathCode.StartsWith(descendantPrefix!))) &&
+            // 数据范围：路径完全相等，或落在"我的路径."之下。
+            // ⚠ 「仅本级」时 scopeChildPrefix 是哨兵前缀，StartsWith 永不命中 ——
+            //   这一条不能省，省了 OrgOnly 就会退化成"本级及下级"（比配置更宽）。
+            (!hasScope || (p.OrgPathCode != null &&
+                           (p.OrgPathCode == scopePathCode
+                            || (hasScopeChildPrefix && p.OrgPathCode.StartsWith(scopeChildPrefix!)))));
     }
 
     private string ComputeIdCardHash(string normalizedIdCard)

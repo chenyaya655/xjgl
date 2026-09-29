@@ -25,6 +25,19 @@
     <PackageReference Include="Volo.Abp.BackgroundJobs.EntityFrameworkCore" Version="$(AbpVersion)" />
     <PackageReference Include="Volo.Abp.TenantManagement.EntityFrameworkCore" Version="$(AbpVersion)" />
     <PackageReference Include="Volo.Abp.OpenIddict.EntityFrameworkCore" Version="$(AbpVersion)" />
+
+    <!--
+      事务性发件箱 / 收件箱（债 4）。
+      ⚠ 类型的真实位置是 **`Volo.Abp.EntityFrameworkCore`**：
+      `IHasEventOutbox` / `IHasEventInbox` / `OutgoingEventRecord` / `ConfigureEventOutbox()`
+      都在那里。我先后按命名习惯猜过
+      `Volo.Abp.EventBus.EntityFrameworkCore`（NuGet 404）和 `Volo.Abp.EventBus`
+      （能编译，但不含这些类型）—— **都是从命名习惯推的，两次都错**。
+      最后靠在缓存里**全量搜符号**才定位到（`Volo.Abp.EntityFrameworkCore.dll`）。
+      `Volo.Abp.EntityFrameworkCore.PostgreSql` 会把它作为传递依赖带进来，
+      但这里显式声明，免得将来上游改了传递依赖就编译不过。
+    -->
+    <PackageReference Include="Volo.Abp.EntityFrameworkCore" Version="$(AbpVersion)" />
   </ItemGroup>
 
   <ItemGroup>

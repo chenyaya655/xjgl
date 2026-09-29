@@ -23,6 +23,27 @@ const collapsed = ref(false)
 
 const menus = computed(() => auth.profile?.menus ?? [])
 
+/**
+ * 真正渲染到左侧菜单里的分组：**滤掉 `isHidden` 的模块**。
+ *
+ * 【为什么过滤放在渲染层，而不是让后端不下发】
+ * 动态路由是用同一份 `menus` 注册的（见 `router/index.ts` 的 `registerDynamicRoutes`）。
+ * 后端若直接把隐藏模块删掉，路由也一起没了 —— "隐藏菜单"就变成了"页面打不开"，
+ * 而「模块管理」里这个复选框的本意是"不进菜单，但按 URL 仍可访问"
+ * （典型场景：从别处跳进来的详情页、灰度中的模块）。
+ * 因此后端照样下发 + 带 `isHidden` 标记，由这里决定画不画。
+ *
+ * 顺带把"整组都隐藏"的分组也去掉，避免留下一个点开是空的子系统。
+ */
+const visibleMenus = computed(() =>
+  menus.value
+    .map((group) => ({
+      ...group,
+      children: group.children.filter((item) => !item.isHidden)
+    }))
+    .filter((group) => group.children.length > 0)
+)
+
 const activePath = computed(() => route.path)
 
 const currentTitle = computed(() => (route.meta.title as string | undefined) ?? '')
@@ -115,7 +136,7 @@ async function handleLogout(): Promise<void> {
             <template #title>工作台</template>
           </el-menu-item>
 
-          <el-sub-menu v-for="group in menus" :key="group.code" :index="group.code">
+          <el-sub-menu v-for="group in visibleMenus" :key="group.code" :index="group.code">
             <template #title>
               <AppIcon :name="group.icon" />
               <span>{{ group.name }}</span>

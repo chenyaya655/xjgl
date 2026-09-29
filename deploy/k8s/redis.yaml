@@ -1,0 +1,147 @@
+# 河南省学籍管理系统 —— 单节点冒烟用的 Redis
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 【Redis 在本系统里是什么角色】
+# 它是"缓存主实现 + 限流令牌桶的状态存储"，但**不是**必需组件：
+# 应用在 Redis 不可用时会降级为内存缓存（限流退化为单机精度）。
+# 这也是为什么 /health **刻意不检查 Redis** —— 把"部分降级"升级成"全站不健康"
+# 会让整个站点被负载均衡摘掉（见 XjglHttpApiHostModule.MapHealthEndpoint 的注释）。
+#
+# 由此推出两条部署上的注意事项：
+#   1. **Redis 连不上不会让 Pod 不健康**，所以"探针全绿"证明不了 Redis 配对了。
+#      必须去看启动日志里有没有「分布式缓存主实现不可用」
+#      （deploy/README.md 第 6 章第 4 条）；
+#   2. 多副本下限流桶必须**共享**，否则精度退化为 N 倍
+#      （deploy/README.md 第 11.1 节，对策是 Redis Lua 原子脚本，已实现）。
+#      所以多副本时 Redis 是硬依赖 —— 它坏了，限流就不再准确。
+#
+# 【生产上不该这么部署】单副本、无哨兵/集群、无持久化保证。
+# 用托管 Redis 时删掉本文件，改 ConfigMap 里的 Redis__Configuration 即可。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xjgl-redis-data
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: redis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      # 与 compose 的 maxmemory 512mb 对齐，留出 AOF 重写的余量
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  # 有状态组件：重建期间不允许"两个 Redis 同时写同一个 AOF 卷"
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: xjgl-redis
+  template:
+    metadata:
+      labels:
+        app: xjgl-redis
+        app.kubernetes.io/name: xjgl
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: redis
+              containerPort: 6379
+          env:
+            # 口令本体只在 Secret 里（键名 REDIS_PASSWORD），
+            # 这里映射成 redis-server 认的环境变量名。
+            # api 那边把同一个键映射成 Redis__Password（见 api-deployment.yaml）——
+            # 一份口令、两个消费方，没有第二处需要同步修改。
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: xjgl-secret
+                  key: REDIS_PASSWORD
+            - name: TZ
+              value: "Asia/Shanghai"
+          # args 里的 $(REDIS_PASSWORD) 由 kubelet 用上面的 env 展开
+          # （与 compose 的 command 列表写法一一对应，含 maxmemory-policy）
+          args:
+            - redis-server
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --maxmemory
+            - "512mb"
+            - --maxmemory-policy
+            - allkeys-lru
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              # 必须带口令：没认证时 redis-cli ping 返回 NOAUTH 而不是 PONG
+              command: ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli --no-auth-warning -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              # 要比 maxmemory 大：maxmemory 只限制数据，进程本身还要内存
+              cpu: "1"
+              memory: 768Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: xjgl-redis-data
+---
+# ---------------------------------------------------------------------------
+# Redis Service
+#
+# 名字必须是 `redis`：ConfigMap 里的 Redis__Configuration 写的是 `redis:6379`。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: xjgl-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

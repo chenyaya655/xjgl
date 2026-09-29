@@ -1,8 +1,8 @@
 # ===========================================================================
-#  河南省学籍管理系统 —— Git 忽略规则
+#  娌冲崡鐪佸绫嶇鐞嗙郴缁?鈥斺€?Git 蹇界暐瑙勫垯
 # ===========================================================================
 
-## ---- 构建产物 ----
+## ---- 鏋勫缓浜х墿 ----
 [Bb]in/
 [Oo]bj/
 [Oo]ut/
@@ -20,11 +20,11 @@ TestResults/
 coverage*.json
 coverage*.xml
 
-## ---- 本机工具链缓存（受限沙箱专用，见 .tools/env.ps1）----
+## ---- 鏈満宸ュ叿閾剧紦瀛橈紙鍙楅檺娌欑涓撶敤锛岃 .tools/env.ps1锛?---
 .tools/
 /tools/nuget-proxy.log
 
-## ---- 本机 NuGet 配置（指向本地镜像代理，不应提交）----
+## ---- 鏈満 NuGet 閰嶇疆锛堟寚鍚戞湰鍦伴暅鍍忎唬鐞嗭紝涓嶅簲鎻愪氦锛?---
 /nuget.config
 
 ## ---- IDE ----
@@ -42,7 +42,7 @@ coverage*.xml
 *.VC.db
 *.VC.VC.opendb
 
-## ---- Node / 前端 ----
+## ---- Node / 鍓嶇 ----
 node_modules/
 dist/
 dist-ssr/
@@ -56,18 +56,17 @@ yarn-error.log*
 coverage/
 .nyc_output/
 unpackage/
-# pnpm 的内容寻址仓库（可能落在仓库根目录）
+# pnpm 鐨勫唴瀹瑰鍧€浠撳簱锛堝彲鑳借惤鍦ㄤ粨搴撴牴鐩綍锛?
 .pnpm-store/
-# uni-app / 小程序产物
-web/apps/mp/dist/
+# uni-app / 灏忕▼搴忎骇鐗?web/apps/mp/dist/
 web/apps/mp/unpackage/
-# Playwright 端到端测试产物（失败截图、trace、HTML 报告都可能上百 MB，绝不入库）
+# Playwright 绔埌绔祴璇曚骇鐗╋紙澶辫触鎴浘銆乼race銆丠TML 鎶ュ憡閮藉彲鑳戒笂鐧?MB锛岀粷涓嶅叆搴擄級
 web/e2e/playwright-report/
 web/e2e/test-results/
 web/e2e/blob-report/
 web/e2e/.playwright/
 
-## ---- 密钥与连接串（政务项目：绝不入库）----
+## ---- 瀵嗛挜涓庤繛鎺ヤ覆锛堟斂鍔￠」鐩細缁濅笉鍏ュ簱锛?---
 appsettings.Secrets.json
 appsettings.*.Secrets.json
 *.pfx
@@ -78,21 +77,24 @@ secrets.json
 .env
 .env.*
 !.env.example
+# Kubernetes Secret：复制 deploy/k8s/secret.example.yaml 成 secret.yaml 之后放的是真实口令，
+# 绝不入库（示例文件本身要进仓库，它只有占位符）
+deploy/k8s/secret.yaml
 
-## ---- 运行期数据 ----
+## ---- 杩愯鏈熸暟鎹?----
 logs/
 uploads/
 temp/
 tmp/
 *.log
 App_Data/
-# 照片降级补偿目录（运行期本地暂存）
-photo-fallback/
+# 鐓х墖闄嶇骇琛ュ伩鐩綍锛堣繍琛屾湡鏈湴鏆傚瓨锛?photo-fallback/
 
-## ---- 学习文档（按需求：交付给个人学习，不进开源仓库）----
-docs/learning/
+## ---- 学习文档 ----
+## 原先按需求不进开源仓库，现已改为随仓库发布（见 README「学习文档」一节）。
+## 这里刻意**不再忽略** docs/learning/ —— 保留说明是为了避免下一个人以为是漏写了。
 
-## ---- 操作系统 ----
+## ---- 鎿嶄綔绯荤粺 ----
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -101,5 +103,8 @@ $RECYCLE.BIN/
 *.swp
 *~
 
-## ---- 本地/CI 生成的 swagger 文档快照（供 tools/audit-routes.mjs 核对用）----
+## ---- 鏈湴/CI 鐢熸垚鐨?swagger 鏂囨。蹇収锛堜緵 tools/audit-routes.mjs 鏍稿鐢級----
 /swagger.json
+## ---- 内部会话纪要（过程记录，不作为公开文档）----
+## 这些是开发过程的交接记录，含本机环境与个人痕迹，只在本机保留（.tools/handoff/）。
+docs/会话交接-*.md

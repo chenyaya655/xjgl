@@ -41,7 +41,7 @@ corepack pnpm@9.15.0 -r build
 
 # 4) 端到端测试（Playwright，会自动拉起后端与 PC 端 dev server）
 corepack pnpm@9.15.0 exec playwright install chromium   # 首次需要
-corepack pnpm@9.15.0 test:e2e                            # 全套约 1 分钟
+corepack pnpm@9.15.0 test:e2e                            # 全套 50 个用例（chromium + h5 两个项目）
 corepack pnpm@9.15.0 test:e2e:headed                     # 看着它点，排查用
 ```
 
@@ -153,8 +153,10 @@ public/fonts/PlangothicP2-Regular.woff2   # 扩展 G/H/I
 
 ## 下一步
 
-- `packages/shared`：把 API 类型与请求封装抽出来，供 H5 与小程序复用（已完成大半，见 `packages/api`）
-- `apps/h5`：手机端（教师用，主要场景是异动审核与拍照上传）
-- `apps/mp`：微信小程序（自定义授权类型 `urn:wechat:miniprogram`）
-- ~~Playwright 端到端用例~~ **已补上**（`e2e/`，27 个用例，约 1 分钟跑完）；
-  还没覆盖的是 **H5 端**、**非 Chromium 内核**与 **6 张学生子表的界面增删改**
+- `packages/api`：三端共享的 API 类型与请求封装（已抽出，见上文「为什么 API 层要抽成包」）
+- ~~`apps/h5`：手机端（教师用，主要场景是异动审核与拍照上传）~~ **已实现**
+  （`apps/h5`，待办审核 + 拍照上传两条路径，见上文「移动端 H5」）
+- `apps/mp`：微信小程序（自定义授权类型 `urn:wechat:miniprogram`，**未开始**）
+- ~~Playwright 端到端用例~~ **已补上**（`e2e/`，**50 个用例**，10 个规格文件，
+  `chromium` 与独立 `h5` 两个项目）；**H5 端**与 **6 张学生子表的界面增删改**都已覆盖，
+  还没覆盖的是 **非 Chromium 内核**与**真实微信 WebView**

@@ -1,0 +1,31 @@
+# 河南省学籍管理系统 —— Kubernetes 命名空间
+#
+# ⚠⚠ 本目录（deploy/k8s/）的诚实声明 —— 请先读完再往下看 ⚠⚠
+#
+#   这些清单**从未在真实集群上应用过**：
+#     - 只有 YAML 解析核对（`node -e "require('js-yaml').loadAll(...)"`），
+#       没有经过 kube-apiserver 的校验（没有 `kubectl apply --dry-run=server`）；
+#     - 没有在任何单节点 k3s / kind / minikube 上跑过一次冒烟。
+#   ROADMAP 第 14 条的验收标准「在任意单节点 K8s 上完整部署并跑通冒烟」**仍未完成**，
+#   本目录只是把 `deploy/README.md` 第 11 章的要点落成可照抄的 YAML，
+#   并配上 `deploy/k8s/README.md` 里的验收清单。
+#
+#   这个仓库的约定是：**没验证过的事就说没验证过**，而不是用"看起来完整"的清单
+#   让人以为上 K8s 已经是一条走过一遍的路。第一次真正 apply 时，
+#   请把实际结果（包括失败）回填到 `deploy/k8s/README.md` 的验收清单里。
+#
+# ---------------------------------------------------------------------------
+# 命名空间
+#
+# 单命名空间装全套：api / web / postgres / redis。生产上数据库与 Redis
+# 通常不该在同一个集群里（更不该跟应用同命名空间），这里是为了让
+# 「单节点 k3s 冒烟」这一条路能一次走完；换成托管 PG/Redis 只需删掉
+# postgres.yaml 与 redis.yaml，并把 ConfigMap/Secret 里的地址指过去。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/part-of: xjgl

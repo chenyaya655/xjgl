@@ -81,6 +81,18 @@ public class ChangeApplyDto : ChangeApplyListItemDto
     public Guid FlowTemplateId { get; set; }
     public int FlowTemplateVersion { get; set; }
 
+    /// <summary>本单已上传的附件数量。</summary>
+    public int AttachmentCount { get; set; }
+
+    /// <summary>该异动类型是否要求上传证明材料（快照自异动类型，便于审核人一眼看到）。</summary>
+    public bool RequireAttachment { get; set; }
+
+    /// <summary>
+    /// 附件要求是否已满足（不需要附件时恒为 true）。
+    /// 审核人据此判断"能不能批"，而不是自己去数附件个数。
+    /// </summary>
+    public bool AttachmentRequirementSatisfied { get; set; }
+
     public List<ChangeFlowTaskDto> Tasks { get; set; } = new();
     public List<ChangeFlowLogDto> Logs { get; set; } = new();
 }

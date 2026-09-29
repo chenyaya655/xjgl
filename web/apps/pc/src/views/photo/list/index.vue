@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { orgApi, photoApi, studentApi } from '@/api'
+import { exportTaskApi, orgApi, photoApi, saveBlob, describeTruncation, studentApi, PhotoStatuses } from '@/api'
 import type {
   MissingPhotoStudent,
   OrgDto,
@@ -13,6 +13,7 @@ import type {
 } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import SchoolSelect from '@/components/SchoolSelect.vue'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -58,42 +59,67 @@ const exportOptions = reactive({
   maxCount: 500
 })
 
+/** 页面卸载后停止轮询（打包上千张照片可能要几十秒，用户很可能等不及就切走了）。 */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+  // 顺带释放原图与缩略图的对象 URL：不释放的话切页后这些 Blob 还占着内存
+  releaseOriginal()
+  Object.values(thumbUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  thumbUrls.value = {}
+})
+
 async function exportPhotos(): Promise<void> {
   exporting.value = true
 
   try {
-    const blob = await photoApi.exportPhotos({
-      status: ledgerQuery.status,
-      keyword: ledgerQuery.keyword || undefined,
-      useThumbnail: exportOptions.useThumbnail,
-      includeMissingList: exportOptions.includeMissingList,
-      maxCount: exportOptions.maxCount
-    })
+    // 照片打包要读上千个文件再压缩，同步做会把请求线程占满、zip 还全在内存里。
+    // 改成任务式后由后台生成，这里只等通知并下载。
+    const task = await exportTaskApi.run(
+      {
+        kind: 'PhotoZip',
+        photoQuery: {
+          status: ledgerQuery.status,
+          keyword: ledgerQuery.keyword || undefined,
+          useThumbnail: exportOptions.useThumbnail,
+          includeMissingList: exportOptions.includeMissingList,
+          maxCount: exportOptions.maxCount
+        }
+      },
+      { shouldStop: () => disposed }
+    )
 
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-
-    link.href = url
-    link.download = `学生照片_${new Date().toISOString().slice(0, 10)}.zip`
-    link.click()
-    URL.revokeObjectURL(url)
+    saveBlob(await exportTaskApi.download(task.id), task.fileName || `学生照片_${new Date().toISOString().slice(0, 10)}.zip`)
 
     exportDialogVisible.value = false
-    ElMessage.success('已开始下载')
-  } catch {
-    ElMessage.error('导出失败，请稍后重试')
+
+    // 缺照片张数必须说出来：压缩包里那份清单写了，但用户不一定会打开看，
+    // 而"以为照片都齐了"是这里最不能接受的误解。
+    const truncation = describeTruncation(task)
+
+    if (truncation) {
+      ElMessage.warning(truncation)
+    } else {
+      ElMessage.success(task.message ?? '已开始下载')
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
   } finally {
     exporting.value = false
   }
 }
 const canCompensate = computed(() => auth.can(MetadataPermissions.Pho.Photo.Compensate))
 
-const statusOptions = [
-  { value: 'Normal', label: '正常' },
-  { value: 'FallbackPending', label: '降级待补偿' },
-  { value: 'Pending', label: '待处理' },
-  { value: 'Failed', label: '处理失败' }
-]
+/**
+ * 照片状态下拉项**来自码表**（PHOTO_STATUS），不再手写。
+ *
+ * 原来这里是 4 行硬编码的中文标签。手写码值的风险不是"打错字"，而是
+ * **两端各自漂移且互不报错**：码表改了中文名、或后端加了新状态，
+ * 这里照样显示旧的、新状态在下拉里根本选不到。
+ * 与学籍状态、异动状态统一走 `useCodeOptions`（债 12）。
+ */
+const photoStatusCodes = useCodeOptions(CodeCategories.PhotoStatus)
+const statusOptions = photoStatusCodes.options
 
 // ---------------------------------------------------------------------------
 // 台账
@@ -149,7 +175,9 @@ function thumbUrl(studentId: string): string | undefined {
 
 /** 只拉取状态正常的照片（失败/待处理的没有可看的图）。 */
 async function loadThumbnails(rows: PhotoDto[]): Promise<void> {
-  const wanted = rows.filter((r) => r.status === 'Normal' || r.status === 'FallbackPending')
+  const wanted = rows.filter(
+    (r) => r.status === PhotoStatuses.Normal || r.status === PhotoStatuses.FallbackPending
+  )
 
   // 换页时先释放上一页的对象 URL
   Object.values(thumbUrls.value).forEach((url) => URL.revokeObjectURL(url))
@@ -170,6 +198,57 @@ async function loadThumbnails(rows: PhotoDto[]): Promise<void> {
   )
 
   thumbUrls.value = next
+}
+
+// ---------------------------------------------------------------------------
+// 看原图
+// ---------------------------------------------------------------------------
+
+/**
+ * 原图预览。
+ *
+ * 【为什么不能直接用缩略图放大】
+ * 台账里的图是 480px 缩略图，放大后糊成一片 —— 而"这张照片是不是这个学生"
+ * 恰恰要靠细节（五官、校服校徽）判断。所以单独拉一次原图。
+ *
+ * 与缩略图同一条约束：**不能用 `<img src="/api/...">` 直接指后端**，
+ * 照片接口要求 Bearer 令牌，浏览器发图片请求不会带 Authorization 头，
+ * 必然 401（表现为图片裂开）。因此统一 axios 取 Blob → createObjectURL。
+ */
+const originalVisible = ref(false)
+const originalLoading = ref(false)
+const originalUrl = ref('')
+const originalTitle = ref('')
+
+/** 释放上一次的对象 URL（不释放的话每看一张都留一份图在内存里）。 */
+function releaseOriginal(): void {
+  if (originalUrl.value) {
+    URL.revokeObjectURL(originalUrl.value)
+    originalUrl.value = ''
+  }
+}
+
+async function viewOriginal(row: PhotoDto): Promise<void> {
+  originalTitle.value = `${row.studentName ?? ''}（${row.studentNo ?? ''}）`
+  originalLoading.value = true
+  originalVisible.value = true
+  releaseOriginal()
+
+  try {
+    const blob = await photoApi.getContent(row.studentId)
+    originalUrl.value = URL.createObjectURL(blob)
+  } catch {
+    // 读不到原图（例如文件已从存储里消失）：如实说明，别留个空框
+    originalVisible.value = false
+    ElMessage.error('读不到这张照片的原图，可能文件已从存储中丢失（可看「状态 / 异常说明」）。')
+  } finally {
+    originalLoading.value = false
+  }
+}
+
+/** 关闭预览时释放（`el-dialog` 的 closed 事件）。 */
+function onOriginalClosed(): void {
+  releaseOriginal()
 }
 
 async function removePhotos(ids: string[]): Promise<void> {
@@ -437,6 +516,9 @@ onMounted(async () => {
     schools.value = []
   }
 
+  // 码表失败不阻塞页面：下拉为空，但台账/名单/健康度照常
+  await photoStatusCodes.load()
+
   await Promise.all([loadLedger(), loadMissing(), refreshHealth()])
 })
 </script>
@@ -548,9 +630,9 @@ onMounted(async () => {
                 <el-tag
                   size="small"
                   :type="
-                    row.status === 'Normal'
+                    row.status === PhotoStatuses.Normal
                       ? 'success'
-                      : row.status === 'Failed'
+                      : row.status === PhotoStatuses.Failed
                         ? 'danger'
                         : 'warning'
                   "
@@ -564,9 +646,16 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column prop="uploadedByName" label="上传人" width="110" />
             <el-table-column prop="errorMessage" label="异常说明" min-width="180" show-overflow-tooltip />
-            <el-table-column v-if="canDelete" label="操作" width="90" align="center" fixed="right">
+            <el-table-column label="操作" width="150" align="center" fixed="right">
               <template #default="{ row }">
-                <el-button link type="danger" @click="removePhotos([row.id])">删除</el-button>
+                <!--
+                  「看原图」：表格里显示的是**缩略图**（480px），核对照片是否张冠李戴时
+                  必须看原图。缩略图直接用 el-image 预览是看不出细节的。
+                -->
+                <el-button link type="primary" @click="viewOriginal(row)">看原图</el-button>
+                <el-button v-if="canDelete" link type="danger" @click="removePhotos([row.id])">
+                  删除
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -651,8 +740,28 @@ onMounted(async () => {
     </el-card>
 
     <!-- ---------------- 导出对话框 ---------------- -->
-    <el-dialog v-model="exportDialogVisible" title="导出照片" width="560px">
-      <el-alert type="info" :closable="false" class="photo-list__export-tip">
+    <!-- 原图预览（表格里的是 480px 缩略图，核对身份必须看原图） -->
+    <el-dialog
+      v-model="originalVisible"
+      :title="`原图 · ${originalTitle}`"
+      width="720px"
+      top="6vh"
+      @closed="onOriginalClosed"
+    >
+      <div v-loading="originalLoading" class="photo-list__original">
+        <el-image
+          v-if="originalUrl"
+          :src="originalUrl"
+          fit="contain"
+          class="photo-list__original-img"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="originalVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="exportDialogVisible" title="导出照片" width="560px">      <el-alert type="info" :closable="false" class="photo-list__export-tip">
         导出范围与当前台账筛选一致（关键字：{{ ledgerQuery.keyword || '不限' }}，
         状态：{{ statusOptions.find((s) => s.value === ledgerQuery.status)?.label ?? '全部' }}）。
         压缩包内含「照片清单.csv」，读不到的照片会明确标注为「文件缺失」。
@@ -903,5 +1012,20 @@ onMounted(async () => {
 
 .photo-ledger__no-thumb {
   color: var(--el-text-color-secondary);
+}
+
+/* 原图预览：给一个固定高度，避免大图把对话框撑到屏幕外 */
+.photo-list__original {
+  min-height: 360px;
+  max-height: 66vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-fill-color-light);
+}
+
+.photo-list__original-img {
+  max-width: 100%;
+  max-height: 66vh;
 }
 </style>

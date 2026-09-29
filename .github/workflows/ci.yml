@@ -118,7 +118,7 @@ jobs:
           node tools/audit-routes.mjs swagger.json
 
   frontend:
-    name: 前端（类型检查 / 生产构建）
+    name: 前端（类型检查 / 单元测试 / 生产构建）
     runs-on: ubuntu-latest
 
     defaults:
@@ -128,10 +128,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ⚠ 这里**必须**是 Node 22.18+ / 24：`pnpm test:unit` 跑的是
+      # `node --test "src/**/*.test.ts"`，直接执行 TypeScript 依赖 Node 内置的
+      # 类型擦除（Node 22.18 起默认开启，20.x 完全没有这个能力，
+      # 在 20 上会以 "Unknown file extension .ts" 失败）。
+      # 之前这个 job 用 Node 20 且**没有**跑单测，所以这个矛盾一直没暴露出来。
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: 启用 corepack（pnpm 版本由 web/package.json 的 packageManager 固定）
         run: corepack enable
@@ -146,11 +151,36 @@ jobs:
       - name: 安装依赖（使用锁文件）
         run: corepack pnpm@9.15.0 install --frozen-lockfile
 
-      - name: 类型检查
+      # 三端都要检查：以前只查 @xjgl/pc，于是 H5 与共享包里的类型错误
+      # 在 CI 里完全不拦（H5 是独立应用，构建与类型检查都与 PC 无关）。
+      - name: 类型检查（PC）
         run: corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
 
-      - name: 生产构建
+      - name: 类型检查（H5）
+        run: corepack pnpm@9.15.0 --filter @xjgl/h5 run typecheck
+
+      - name: 类型检查（共享 API 包）
+        run: corepack pnpm@9.15.0 --filter @xjgl/api run typecheck
+
+      # 前端单元测试（目前是 CSV 编码探测这类的纯函数）。
+      # 以前 CI 完全没跑它 —— 也就是说"改了编码探测、单测红了"CI 也是绿的。
+      - name: 前端单元测试
+        run: corepack pnpm@9.15.0 --filter @xjgl/pc run test:unit
+
+      # 跨语言的三处"约定"核对（权限码 / 码类别 / 操作类型）。
+      # 这三类不一致的表现都是**不报错**：按钮不显示、下拉静默变空、编辑后显示为空。
+      # eslint 管不到（跨 C# 与 TS），所以单独一步（见脚本顶部说明）。
+      - name: 前后端约定一致性核对
+        working-directory: .
+        run: node tools/check-permissions-sync.mjs
+
+      - name: 生产构建（PC）
         run: corepack pnpm@9.15.0 --filter @xjgl/pc run build
+
+      # H5 是另一个 Vite 应用，构建目标（es2015）与分包策略都不同，
+      # 单独构建一次才能保证"老安卓机能跑"这件事没被改坏。
+      - name: 生产构建（H5）
+        run: corepack pnpm@9.15.0 --filter @xjgl/h5 run build
 
   deploy:
     name: 部署编排（语法 + 与应用配置的一致性）

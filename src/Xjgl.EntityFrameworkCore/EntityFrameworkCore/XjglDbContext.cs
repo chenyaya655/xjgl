@@ -4,6 +4,7 @@ using Volo.Abp.BackgroundJobs.EntityFrameworkCore;
 using Volo.Abp.Data;
 using Volo.Abp.DependencyInjection;
 using Volo.Abp.EntityFrameworkCore;
+using Volo.Abp.EntityFrameworkCore.DistributedEvents;
 using Volo.Abp.FeatureManagement.EntityFrameworkCore;
 using Volo.Abp.Identity;
 using Volo.Abp.Identity.EntityFrameworkCore;
@@ -21,6 +22,17 @@ namespace Xjgl.EntityFrameworkCore;
 /// 重要：本上下文只承载框架表（Identity / OpenIddict / 权限 / 设置 / 审计 / 后台作业 / 租户），
 /// 业务表（sys_ / stu_ 前缀）由 SqlSugar CodeFirst 负责，不放进这里。
 /// 这样两套 ORM 的职责边界清晰，互不干扰。
+///
+/// 【为什么还实现了 <see cref="IHasEventOutbox"/> / <see cref="IHasEventInbox"/>（债 4）】
+/// 在做这层改造之前，接入 RabbitMQ 会造成**静默数据丢失**（有完整实测证据，见
+/// <c>XjglHttpApiHostModule.ConfigureEventBus</c> 的注释）：
+/// ABP 的工作单元在**响应写出之后**才提交，而身份模块的写操作会发布分布式事件；
+/// MQ 发布失败 → 工作单元提交失败 → 事务回滚 —— 但 HTTP 响应早已发出，
+/// 客户端只看到"成功"，库里却没有那条数据。
+///
+/// 开启 Outbox 之后，事件的落库与业务数据在**同一个 EF Core 事务**里完成，
+/// 再由后台 worker 重发到 broker。于是 broker 不可达只意味着"事件稍后重发"，
+/// **不再影响业务写入** —— 这正是重新接入 MQ 的前置条件。
 /// </summary>
 [ReplaceDbContext(typeof(IIdentityDbContext))]
 [ReplaceDbContext(typeof(ITenantManagementDbContext))]
@@ -28,7 +40,9 @@ namespace Xjgl.EntityFrameworkCore;
 public class XjglDbContext :
     AbpDbContext<XjglDbContext>,
     IIdentityDbContext,
-    ITenantManagementDbContext
+    ITenantManagementDbContext,
+    IHasEventOutbox,
+    IHasEventInbox
 {
     #region 来自 ABP 模块的实体
 
@@ -45,6 +59,10 @@ public class XjglDbContext :
     // Tenant Management（本系统关闭多租户，但保留模块与表，避免改动框架装配）
     public DbSet<Tenant> Tenants { get; set; } = default!;
     public DbSet<TenantConnectionString> TenantConnectionStrings { get; set; } = default!;
+
+    // 事务性发件箱 / 收件箱（债 4）
+    public DbSet<OutgoingEventRecord> OutgoingEvents { get; set; } = default!;
+    public DbSet<IncomingEventRecord> IncomingEvents { get; set; } = default!;
 
     #endregion
 
@@ -66,6 +84,10 @@ public class XjglDbContext :
         builder.ConfigureOpenIddict();
         builder.ConfigureFeatureManagement();
         builder.ConfigureTenantManagement();
+
+        // 发件箱 / 收件箱表（债 4）
+        builder.ConfigureEventOutbox();
+        builder.ConfigureEventInbox();
 
         // 业务表不在这里配置，见 Xjgl.SqlSugarCore
     }

@@ -353,7 +353,7 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
         var scopeChildPrefix = scopePathCode == null
             ? null
-            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+            : (scope.Scope == DataScopes.OrgOnly ? DataScopes.ImpossiblePathPrefix : scopePathCode + ".");
         var hasScopePath = !string.IsNullOrWhiteSpace(scopePathCode);
         var hasScopeChildPrefix = !string.IsNullOrWhiteSpace(scopeChildPrefix);
 
@@ -395,7 +395,7 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
         var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
         var scopeChildPrefix = scopePathCode == null
             ? null
-            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+            : (scope.Scope == DataScopes.OrgOnly ? DataScopes.ImpossiblePathPrefix : scopePathCode + ".");
         var hasScopePath = !string.IsNullOrWhiteSpace(scopePathCode);
         var hasScopeChildPrefix = !string.IsNullOrWhiteSpace(scopeChildPrefix);
 
@@ -420,7 +420,8 @@ public class PhotoAppService : XjglAppService, IPhotoAppService
     /// 一个在真实物化路径里不可能出现的字符，使 StartsWith 永不命中，
     /// 于是"仅本级"只剩"路径完全相等"这一条 —— 且不必在表达式里写三元。
     /// </summary>
-    private const string ImpossiblePathPrefix = "\u0001";
+    // 哨兵前缀已上提到 DataScopes.ImpossiblePathPrefix：4 处查询都要用它，
+    // 各写一份的后果是"新加一处查询时漏掉它"，而漏掉会让 OrgOnly 静默放宽。
 
     /// <summary>
     /// 单张照片的数据范围校验（读取、删除都要过这一关）。

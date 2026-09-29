@@ -1,0 +1,84 @@
+# 河南省学籍管理系统 —— 数据库迁移 + 种子（Job，**单次执行**）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 【为什么必须是独立的一次性 Job，而不是 InitContainer / 随 Pod 启动】
+#
+# 迁移是"建表 + 补列 + 写种子"。多副本同时启动 = 多个进程同时做这件事：
+#   - 框架表走 EF Core 迁移（`__EFMigrationsHistory` 是**共享的记账表**），
+#     并发执行会出现"两个进程都认为该跑这个迁移"的竞争；
+#   - 业务表走 SqlSugar CodeFirst（缺表建表、缺列补列），并发建表同样会撞。
+#   - 种子数据本身是幂等的，但幂等不等于"并发安全"。
+# deploy/README.md 第 11.3 节的结论就是：**迁移器必须单次执行**。
+# 所以这里用 `Job` + `backoffLimit: 0`：失败就停，不重试（重试会掩盖"为什么失败"）。
+#
+# 【怎么用】
+#   1. 先 `kubectl apply -f deploy/k8s/postgres.yaml`，等它 Ready；
+#   2. `kubectl apply -f deploy/k8s/migrate-job.yaml`
+#      `kubectl -n xjgl wait --for=condition=complete job/xjgl-migrate --timeout=15m`
+#   3. 再 apply api/web/ingress（见 README 的步骤顺序）。
+#
+# 【升级时】
+#   Job 的 spec 是**不可变**的，改不了就重建：
+#     kubectl -n xjgl delete job xjgl-migrate --ignore-not-found
+#     kubectl apply -f deploy/k8s/migrate-job.yaml
+#   用 Helm 的话，等价物是 `helm.sh/hook: pre-install,pre-upgrade`
+#   （deploy/README.md 第 11.3 节的建议）。
+#
+# 【迁移是幂等的】
+#   重复执行不会产生脏数据（这是本项目从第 6 章起就守着的一条），
+#   但**不要**因此把它塞进 CronJob 定时跑：迁移不是"对齐状态"的运维动作。
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: xjgl-migrate
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: migrate
+spec:
+  backoffLimit: 0
+  # 成功/失败后保留 24 小时便于看日志；想立刻重跑就按上面的 delete 命令来
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: xjgl
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          # 与 api 同一个镜像（api.Dockerfile 里把 DbMigrator 一起 publish 了），
+          # 这样"生产上初始化数据库"不需要给运维装 SDK
+          image: xjgl/api:latest
+          imagePullPolicy: IfNotPresent
+          # ⚠ 只注入迁移真正需要的东西，与 compose 的 migrate 服务逐项对齐：
+          #   迁移器有它自己的 appsettings.json（种子数据里的 OpenIddict RP 配置
+          #   就在那一份里），**不要**在这里 envFrom 整个 xjgl-config ——
+          #   那会把 Redis、字体目录等运行时配置也灌进去，制造
+          #   "迁移器读到的配置和 Host 不一样"这种很难查的分叉。
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: xjgl-secret
+                  key: POSTGRES_PASSWORD
+            - name: ConnectionStrings__Default
+              value: "Host=postgres;Port=5432;Database=xjgl;User ID=xjgl;Password=$(POSTGRES_PASSWORD);Timeout=30;Command Timeout=120"
+          # 覆盖镜像的 ENTRYPOINT/CMD：跑迁移器而不是 Host
+          # （api.Dockerfile 的 ENTRYPOINT 是 ["dotnet"]，正是为了能这样覆盖）
+          command: ["dotnet", "/app/migrator/Xjgl.DbMigrator.dll"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

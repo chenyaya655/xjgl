@@ -32,19 +32,19 @@ public class PhotosController : XjglController
 
     private readonly IPhotoUploadService _uploadService;
     private readonly IPhotoContentService _contentService;
-    private readonly IPhotoExportService _exportService;
     private readonly ITokenBucketRateLimiter _rateLimiter;
+    private readonly IRateLimitPolicyProvider _rateLimitPolicies;
 
     public PhotosController(
         IPhotoUploadService uploadService,
         IPhotoContentService contentService,
-        IPhotoExportService exportService,
-        ITokenBucketRateLimiter rateLimiter)
+        ITokenBucketRateLimiter rateLimiter,
+        IRateLimitPolicyProvider rateLimitPolicies)
     {
         _uploadService = uploadService;
         _contentService = contentService;
-        _exportService = exportService;
         _rateLimiter = rateLimiter;
+        _rateLimitPolicies = rateLimitPolicies;
     }
 
     /// <summary>
@@ -67,7 +67,7 @@ public class PhotosController : XjglController
         [FromForm] Guid? batchId = null)
     {
         // 限流放在最前面：被挡住时连表单都不必解析
-        var limited = await EnforceRateLimitAsync(_rateLimiter, RateLimitPolicies.PhotoUpload, "photo-upload");
+        var limited = await EnforceRateLimitAsync(_rateLimiter, _rateLimitPolicies, RateLimitPolicies.PhotoUpload.Name);
 
         if (limited != null)
         {
@@ -135,7 +135,7 @@ public class PhotosController : XjglController
         [FromForm] Guid studentId,
         [FromForm] Guid? batchId = null)
     {
-        var limited = await EnforceRateLimitAsync(_rateLimiter, RateLimitPolicies.PhotoUpload, "photo-upload");
+        var limited = await EnforceRateLimitAsync(_rateLimiter, _rateLimitPolicies, RateLimitPolicies.PhotoUpload.Name);
 
         if (limited != null)
         {
@@ -188,36 +188,12 @@ public class PhotosController : XjglController
     /// <summary>
     /// 按条件打包导出照片（zip）。
     ///
-    /// 压缩包里除了照片还有两份 CSV：**照片清单**（哪张有、哪张在台账里有但读不到）
-    /// 与**缺照片名单**（可选）。照片的文件名是「学籍辅号_姓名」，方便和花名册对照。
-    ///
-    /// 权限同时要求 <c>Export</c> 与 <c>Query</c>：导出内部复用台账查询，
-    /// 只给 Export 不给 Query 的话会在内部调用处 403 —— 那是个让人摸不着头脑的报错，
-    /// 不如在这里就把要求写清楚。
+    /// ⚠ 本接口已**移除**：照片打包要读上千个文件并压缩，同步做会把请求线程占满，
+    ///   而且浏览器先超时、服务端还在跑（用户看到"失败"、文件其实已生成，他再点一次）。
+    ///   现在改为 <c>POST /api/app/export-task</c>（Kind=PhotoZip）入队，
+    ///   由后台任务生成、走 <c>GET /api/export-task/{id}/download</c> 下载。
+    ///   打包逻辑本身没动，仍是 <c>IPhotoExportService</c>。
     /// </summary>
-    [HttpGet("export")]
-    [Authorize(MetadataPermissions.Pho.Photo.Export)]
-    [Authorize(MetadataPermissions.Pho.Photo.Query)]
-    public async Task<IActionResult> ExportAsync(
-        [FromQuery] PhotoExportQueryDto input,
-        CancellationToken cancellationToken)
-    {
-        // 导出要读大量文件并压缩，比查询重得多，单独给它一个更严的策略
-        var limited = await EnforceRateLimitAsync(
-            _rateLimiter,
-            RateLimitPolicies.PhotoExport,
-            "photo-export",
-            cancellationToken: cancellationToken);
-
-        if (limited != null)
-        {
-            return limited;
-        }
-
-        var result = await _exportService.ExportAsync(input, cancellationToken);
-
-        return File(result.Content, "application/zip", result.FileName);
-    }
 
     private async Task<IActionResult> SendPhotoAsync(
         Guid studentId,

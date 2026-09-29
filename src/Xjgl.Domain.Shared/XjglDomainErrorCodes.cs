@@ -13,11 +13,23 @@ public static class XjglDomainErrorCodes
     public const string DataInUse = "Xjgl:00003";
     public const string ValidationFailed = "Xjgl:00004";
 
+    /// <summary>
+    /// 触发限流。
+    ///
+    /// 单独一个码是为了能把它映射成 HTTP 429：ABP 默认把 BusinessException 映射成 403，
+    /// 而 403 会让前端提示"没有权限"，用户于是去找管理员要权限 ——
+    /// 实际只是"慢一点再来"。码不同才能分别映射。
+    /// </summary>
+    public const string RateLimitExceeded = "Xjgl:00005";
+
     // ---- 组织与学校 00100 - 00199 ----
     public const string OrgNotFound = "Xjgl:00100";
     public const string OrgHasChildren = "Xjgl:00101";
     public const string SchoolCodeDuplicated = "Xjgl:00102";
     public const string OrgCodeDuplicated = "Xjgl:00103";
+
+    /// <summary>组织层级不合法（四级树是省 → 市 → 县 → 校，不允许跳级挂靠）。</summary>
+    public const string OrgHierarchyInvalid = "Xjgl:00104";
 
     // ---- 用户与注册激活 00200 - 00299 ----
     public const string PredefinedUserNotFound = "Xjgl:00200";
@@ -51,6 +63,26 @@ public static class XjglDomainErrorCodes
     public const string TaskNotAssignedToYou = "Xjgl:00605";
     public const string RevokeNotAllowed = "Xjgl:00606";
     public const string FlowVersionConflict = "Xjgl:00607";
+
+    /// <summary>该审批节点在流程模板里被设为「不允许驳回」。</summary>
+    public const string RejectNotAllowed = "Xjgl:00608";
+
+    // ---- 异动附件 00609 - 00612 ----
+    // 这四个码各自都被真实校验点使用（不是"声明了没人管"的占位）。
+    // 与照片的 007xx 分开编码：附件的生命周期与照片完全不同（见 IChangeAttachmentStore 的说明），
+    // 前端要能按码区分"附件"与"照片"两类提示。
+
+    /// <summary>附件超过单文件大小上限。</summary>
+    public const string ChangeAttachmentTooLarge = "Xjgl:00609";
+
+    /// <summary>附件扩展名不在允许列表内，或内容与扩展名不符。</summary>
+    public const string ChangeAttachmentFormatNotSupported = "Xjgl:00610";
+
+    /// <summary>该异动类型要求上传证明材料，而申请单还没有任何附件。</summary>
+    public const string ChangeAttachmentRequired = "Xjgl:00611";
+
+    /// <summary>附件不存在（记录已被删除，或存储里的文件已丢失）。</summary>
+    public const string ChangeAttachmentNotFound = "Xjgl:00612";
 
     // ---- 照片与文件 00700 - 00799 ----
     public const string PhotoNotFound = "Xjgl:00700";

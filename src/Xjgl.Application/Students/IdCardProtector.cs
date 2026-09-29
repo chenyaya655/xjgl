@@ -88,11 +88,14 @@ public class IdCardProtector : IIdCardProtector, ITransientDependency
     /// <inheritdoc />
     public string ComputeHash(string normalizedIdCard)
     {
-        var key = _configuration["Xjgl:Security:IdCardHmacKey"];
+        // 配置键与回退值都取自 Domain.Shared：DbMigrator 的演示种子要算出一模一样的摘要，
+        // 共享常量是唯一能保证"两边一致"的办法（各自写一份字面量时，
+        // 改一处忘一处会让查重与秒传静默失效）。
+        var key = _configuration[IdCardValidator.HmacKeyConfigKey];
 
         if (key.IsNullOrWhiteSpace())
         {
-            key = "xjgl-dev-idcard-hmac-key-please-change-in-production";
+            key = IdCardValidator.DevFallbackHmacKey;
         }
 
         return IdCardValidator.ComputeIdCardHash(normalizedIdCard, Encoding.UTF8.GetBytes(key!));

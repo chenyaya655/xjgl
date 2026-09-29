@@ -152,17 +152,11 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
 
         public string? RelativePath { get; init; }
 
-        /// <summary>缩略图的相对路径（规则见 <see cref="PhotoPathRule.BuildThumbnail"/>）。</summary>
-        public string? ThumbnailPath { get; init; }
-
-        /// <summary>原图尺寸；内容不是可解码的图片时为 null（此时不生成缩略图，但上传照常完成）。</summary>
+        /// <summary>
+        /// 原图尺寸。内容不是可解码的图片时为 null —— 那种情况现在会在校验阶段直接拒收，
+        /// 因此走到落库阶段的条目尺寸必然非空（见 PrepareAsync 的债 20 说明）。
+        /// </summary>
         public PhotoImageSize? Size { get; set; }
-
-        /// <summary>缩略图是否已成功写入存储。</summary>
-        public bool ThumbnailWritten { get; set; }
-
-        /// <summary>缩略图写入失败的原因（只写日志，不影响上传结果）。</summary>
-        public string? ThumbnailError { get; set; }
 
         /// <summary>内容字节数。写完存储后 <see cref="Content"/> 会被释放，因此单独留一份长度。</summary>
         public long ContentLength { get; init; }
@@ -235,11 +229,28 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
             prepared.Student.Id,
             request.FileName);
 
-        // 尺寸探测放在这里（内容还在手上），缩略图的**生成**放到并发写存储阶段：
-        // 解码 + 缩放是 CPU 活，放在校验阶段会让"几百张照片"的批次在写存储之前就卡住。
-        // 探测不出来（改了后缀的文本、损坏文件）也不拒绝上传，只是没有尺寸与缩略图 ——
-        // 内容校验是另一件事，见技术债「上传内容未做真实性校验」。
+        // 探测放在这里（内容还在手上），缩略图的**生成**已移到后台任务（见 PhotoThumbnailService）。
         var size = await _imageProcessor.ProbeAsync(content, cancellationToken);
+
+        // ★ 债 20：探测结果从"仅供参考"改为**校验条件**。
+        //
+        // 在此之前"改了后缀的文本"是放行的（只是没有尺寸与缩略图），于是存储里会躺着
+        // 根本不是图片的文件，而台账、缺照片名单、打印、导出全都假设"有照片 = 有图可看"，
+        // 最终表现为列表页白图、打印件空白 —— 却查不出是哪里错了。
+        //
+        // 【为什么这不算"用存储可用性卡教师上传"】
+        // 探测只解字节内容，**完全不碰存储**。NAS 抖动时它照样成功，
+        // 所以"存储瞬时不可用"不会被误判成"内容非法"。反过来，
+        // 若拿存储探活结果来拒收，就等于把一次网络抖动变成"教师传不上去"。
+        if (size == null)
+        {
+            itemResult.ErrorMessage =
+                "文件内容不是可识别的图片（常见原因：把 txt / pdf / 压缩包等改了扩展名）。" +
+                "请上传真正的 jpg / jpeg / png / bmp 文件。";
+            result.Failed++;
+            result.Items.Add(itemResult);
+            return prepared;
+        }
 
         prepared.Size = size;
 
@@ -270,9 +281,8 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
             Content = content,
             Hash = hash,
             RelativePath = relativePath,
-            ThumbnailPath = PhotoPathRule.BuildThumbnail(prepared.Student.SchoolOrgId, prepared.Student.Id),
             // 注意：探测结果必须**显式带过来**。writeItem 是另一个对象，
-            // 只给 prepared 赋值的话，落库阶段读到的仍是 null —— 尺寸与缩略图会静默丢失
+            // 只给 prepared 赋值的话，落库阶段读到的仍是 null —— 尺寸会静默丢失
             // （这个坑被集成测试逮住：result.Width 一直是 0）
             Size = size,
             ContentLength = content.Length,
@@ -306,10 +316,10 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
                 using var stream = new MemoryStream(item.Content!, writable: false);
                 item.Write = await _storage.WriteAsync(item.RelativePath!, stream, cancellationToken);
 
-                if (item.Write.Success)
-                {
-                    await WriteThumbnailAsync(item, cancellationToken);
-                }
+                // 缩略图**不在这里生成**（债 18）：解码 + 缩放是 CPU 活，
+                // 塞在上传请求里会让一次 500 张的批次把请求线程占住几十秒，
+                // 而它只是"列表页少加载几 MB"的可选增强。改由 PhotoThumbnailService
+                // 周期补齐 —— 与老照片回填走的是同一条路径。
             }
             catch (Exception ex)
             {
@@ -324,49 +334,6 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         });
 
         await Task.WhenAll(tasks);
-    }
-
-    /// <summary>
-    /// 生成并写入缩略图。
-    ///
-    /// **缩略图是锦上添花，失败绝不能影响上传**：它生成不出来时只记日志，
-    /// 原图照样已经写好了、台账照样登记 —— 列表页大不了继续加载原图。
-    /// 这也是为什么这里吞掉所有异常而不是向上抛。
-    /// </summary>
-    private async Task WriteThumbnailAsync(PreparedItem item, CancellationToken cancellationToken)
-    {
-        if (item.ThumbnailPath == null || item.Content == null)
-        {
-            return;
-        }
-
-        if (item.Size == null)
-        {
-            // 不是可解码的图片（例如只改了后缀的文件）：没有缩略图可生成
-            return;
-        }
-
-        try
-        {
-            var thumbnail = await _imageProcessor.CreateThumbnailAsync(item.Content, cancellationToken: cancellationToken);
-
-            if (thumbnail == null)
-            {
-                return;
-            }
-
-            using var thumbStream = new MemoryStream(thumbnail, writable: false);
-            var write = await _storage.WriteAsync(item.ThumbnailPath, thumbStream, cancellationToken);
-
-            item.ThumbnailWritten = write.Success;
-            item.ThumbnailError = write.Success ? null : write.Error;
-        }
-        catch (Exception ex)
-        {
-            item.ThumbnailError = ex.Message;
-
-            _logger.LogWarning(ex, "生成缩略图失败：{Path}", item.RelativePath);
-        }
     }
 
     private async Task PersistAsync(
@@ -488,18 +455,18 @@ public class PhotoUploadService : IPhotoUploadService, ITransientDependency
         row.UploadedByName = userName;
         row.FileSize = item.ContentLength;
 
-        // 尺寸与缩略图：探测/生成失败时保持原值（0 / null），
-        // 而不是把上一次成功的值抹掉 —— 重新上传一张坏图不该让旧缩略图也消失
+        // 尺寸：探测失败时保持原值（0），而不是把上一次成功的值抹掉
         if (item.Size != null)
         {
             row.Width = item.Size.Width;
             row.Height = item.Size.Height;
         }
 
-        if (item.ThumbnailWritten)
-        {
-            row.ThumbnailPath = item.ThumbnailPath;
-        }
+        // ★ 缩略图路径**必须清空**：走到这里的都是"内容变了"或"上次写失败"的情况，
+        // 旧的缩略图属于上一张照片 —— 不清掉的话，列表页会继续显示上一张脸，
+        // 而且因为 ThumbnailPath 非空，后台补齐任务会认为"已有缩略图"而永远不修正它。
+        // 清空之后到补齐完成之前，读取会回落原图（PhotoContentService 已实现），不会白屏。
+        row.ThumbnailPath = null;
 
         return row;
     }

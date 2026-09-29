@@ -10,7 +10,14 @@ public class StudentListItemDto : EntityDto<Guid>
     public string? NationalStudentNo { get; set; }
     public string Name { get; set; } = default!;
 
-    /// <summary>是否含生僻字（前端据此启用备用字体或图片兜底）。</summary>
+    /// <summary>
+    /// 是否含生僻字（前端据此启用备用字体）。
+    ///
+    /// ⚠ **不要**用"生成生僻字图片"兜底（已明确否决）：那等于把文字变成位图，
+    ///   从此不可检索、不可复制、不可比对，而且每遇到一个陌生字都要先有一张图。
+    ///   方向是在**编码层**解决（按 Unicode 码点处理 + 用字体覆盖码点），
+    ///   见 <c>RareCharacterText</c> 的说明。
+    /// </summary>
     public bool HasRareCharacter { get; set; }
 
     public string GenderCode { get; set; } = default!;
@@ -156,7 +163,25 @@ public class CreateUpdateStudentDto
     public string? StudentStatusCode { get; set; }
 
     public bool IsMigrantChild { get; set; }
+
+    /// <summary>
+    /// 随迁子女类型码。
+    ///
+    /// 【为什么它一直写不进来】
+    /// 详情 DTO（<see cref="StudentDto"/>）与实体（<c>StuStudent.MigrantTypeCode</c>）
+    /// 都有这个字段，但新增/修改 DTO 漏了它 —— 于是"随迁类型"这一栏
+    /// **任何接口都写不进去**，只在导出/详情里回读得到（恒为 null）。
+    /// 同类问题还有下面的留守儿童类型码。
+    /// </summary>
+    [StringLength(8)]
+    public string? MigrantTypeCode { get; set; }
+
     public bool IsLeftBehindChild { get; set; }
+
+    /// <summary>留守儿童类型码（同上：此前新增/修改 DTO 缺失，写不进来）。</summary>
+    [StringLength(8)]
+    public string? LeftBehindTypeCode { get; set; }
+
     public bool IsPoor { get; set; }
     public bool IsDisabled { get; set; }
 

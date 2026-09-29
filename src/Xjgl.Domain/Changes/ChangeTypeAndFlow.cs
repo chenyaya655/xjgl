@@ -79,7 +79,19 @@ public class StuChangeType : FullAuditedAggregateRoot<Guid>, IXjglBusinessEntity
     /// <summary>允许申请的年级码白名单，逗号分隔；为空表示不限。</summary>
     public string? GradeScope { get; set; }
 
-    /// <summary>是否必须上传证明材料。</summary>
+    /// <summary>
+    /// 是否必须上传证明材料。
+    ///
+    /// 【为什么校验点在「批准前」而不是「提交时」】
+    /// 提交时申请单**还不存在**（`applyId` 是提交那一刻生成的），客户端根本
+    /// 无从先上传附件。要按"提交时必须带附件"来做，就得先引入"草稿"阶段
+    /// （创建 → 传附件 → 提交），那是一次流程改造，而不是加一个开关。
+    /// 因此真正的拦截在**第一次批准**时（见 `ChangeFlowAppService.ApproveCoreAsync`）：
+    /// 规则依然是真的（没有附件就批准不了），也符合"先提交、后补材料"的实际做法。
+    ///
+    /// 这个字段上一轮被**删除**过，原因是"没有任何读取方，勾了等于没勾"。
+    /// 本轮随附件能力一起加回来，并且**真的有代码读它**（批准校验 + 申请单详情展示）。
+    /// </summary>
     public bool RequireAttachment { get; set; }
 
     /// <summary>当前启用的流程模板（冗余，便于列表展示）。</summary>
@@ -242,9 +254,13 @@ public class StuChangeFlowNode : FullAuditedAggregateRoot<Guid>, IXjglBusinessEn
     /// <summary>合并策略，取值见 <see cref="ChangeMergeStrategies"/>。</summary>
     public string MergeStrategy { get; set; } = ChangeMergeStrategies.MergeToLast;
 
+    /// <summary>
+    /// 该节点是否允许驳回（默认允许）。审核时真的校验，见 `ChangeFlowAppService.RejectAsync`。
+    ///
+    /// 这里原来还有一个 `AllowDelegate`：既没有配置入口、也没有任何代码读它，
+    /// 而权限委派功能本身尚未实现，已随本轮清理删除。
+    /// </summary>
     public bool AllowReject { get; set; } = true;
-
-    public bool AllowDelegate { get; set; }
 
     /// <summary>超时天数；0 表示不限制。</summary>
     public int TimeoutDays { get; set; }

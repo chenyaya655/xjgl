@@ -6,6 +6,7 @@ using Volo.Abp.Guids;
 using Volo.Abp.Timing;
 using Xjgl.Data;
 using Xjgl.Organizations;
+using Xjgl.Photos;
 using Xjgl.Users;
 using Xunit;
 
@@ -34,6 +35,7 @@ public class StudentProfileTests : XjglIntegrationTestBase
     private readonly IStudentAppService _students;
     private readonly IOrgAppService _orgAppService;
     private readonly IXjglRepository<SysUserPredefine> _predefines;
+    private readonly IXjglRepository<StuChangeLog> _changeLogs;
     private readonly IGuidGenerator _guidGenerator;
     private readonly IClock _clock;
     private readonly FakeCurrentPrincipalAccessor _principal;
@@ -44,6 +46,7 @@ public class StudentProfileTests : XjglIntegrationTestBase
         _students = GetRequiredService<IStudentAppService>();
         _orgAppService = GetRequiredService<IOrgAppService>();
         _predefines = GetRequiredService<IXjglRepository<SysUserPredefine>>();
+        _changeLogs = GetRequiredService<IXjglRepository<StuChangeLog>>();
         _guidGenerator = GetRequiredService<IGuidGenerator>();
         _clock = GetRequiredService<IClock>();
         _principal = GetRequiredService<FakeCurrentPrincipalAccessor>();
@@ -538,5 +541,137 @@ public class StudentProfileTests : XjglIntegrationTestBase
 
         await Should.ThrowAsync<EntityNotFoundException>(() =>
             _profile.GetGuardiansAsync(Guid.NewGuid()));
+    }
+
+    // ==================================================================
+    // 删除学生时的级联软删（债 17）
+    // ==================================================================
+
+    [Fact]
+    public async Task 删除学生_六张子表与留痕一并软删()
+    {
+        // 【这条用例守的是什么】
+        // 子表都是独立路由，主档软删之后它们仍然是 is_deleted = false。
+        // 后果不只是"统计多算了几个人"——监护人表里有**加密的身份证号与联系电话**，
+        // 学生档案删了这些敏感信息还留在库里，属于"以为删了其实没删"。
+        //
+        // 断言方式：**直接查仓储**（`GetListAsync` 走的是"只返回未删"的口径），
+        // 因此"查得到"就等于"没删干净"。用 API 查是不行的 ——
+        // 主档一删，子表接口会因为"学生不存在"直接抛异常，断言会失去意义。
+        SignInAsSuperAdmin();
+
+        var school = await CreateSchoolAsync("级联测试学校");
+        var student = await CreateStudentAsync(school.Id, "级联测试学生");
+
+        // 六张子表各造一行（体检用另一个学年，避免与同年限制冲突）
+        await _profile.CreateGuardianAsync(student.Id, new CreateUpdateGuardianDto
+        {
+            Name = "级联家长", RelationCode = "1", IdCardNumber = NewUniqueIdCard(1978),
+            PhoneNumber = "13600000001"
+        });
+
+        await _profile.CreateResumeAsync(student.Id, new CreateUpdateResumeDto
+        {
+            SchoolName = "级联幼儿园",
+            StartDate = new DateTime(2016, 9, 1),
+            EndDate = new DateTime(2019, 7, 1)
+        });
+
+        await _profile.CreateRewardAsync(student.Id, new CreateUpdateRewardDto
+        {
+            RewardDate = new DateTime(2025, 6, 1), RewardName = "级联三好学生",
+            RewardTypeCode = "1", RewardLevelCode = "1", AwardOrg = "级联测试学校"
+        });
+
+        await _profile.CreatePunishmentAsync(student.Id, new CreateUpdatePunishmentDto
+        {
+            PunishDate = new DateTime(2024, 11, 1), PunishName = "级联警告", PunishTypeCode = "1"
+        });
+
+        await _profile.CreateSubsidyAsync(student.Id, new CreateUpdateSubsidyDto
+        {
+            AcademicYear = Year, SubsidyName = "级联补助", SubsidyTypeCode = "3", Amount = 625.55m
+        });
+
+        await _profile.CreatePhysicalAsync(student.Id, new CreateUpdatePhysicalDto
+        {
+            AcademicYear = Year, Height = 132.5m, Weight = 28.4m, HealthCode = "1"
+        });
+
+        // 变更留痕：上面这些创建动作本身就会写入流水
+        var logsBefore = await _changeLogs.GetListAsync(l => l.StudentId == student.Id);
+
+        logsBefore.ShouldNotBeEmpty("子表增删改都会写留痕，这是本次断言的前提");
+        var guardians = GetRequiredService<IXjglRepository<StuGuardian>>();
+        var resumes = GetRequiredService<IXjglRepository<StuResume>>();
+        var rewards = GetRequiredService<IXjglRepository<StuReward>>();
+        var punishments = GetRequiredService<IXjglRepository<StuPunishment>>();
+        var subsidies = GetRequiredService<IXjglRepository<StuSubsidy>>();
+        var physicals = GetRequiredService<IXjglRepository<StuPhysical>>();
+        var photos = GetRequiredService<IXjglRepository<StuPhoto>>();
+
+        // 删之前每张表确实有数据（否则"删完是空"这个断言是假绿）
+        (await guardians.GetListAsync(g => g.StudentId == student.Id)).Count.ShouldBe(1);
+        (await resumes.GetListAsync(r => r.StudentId == student.Id)).Count.ShouldBe(1);
+        (await rewards.GetListAsync(r => r.StudentId == student.Id)).Count.ShouldBe(1);
+        (await punishments.GetListAsync(p => p.StudentId == student.Id)).Count.ShouldBe(1);
+        (await subsidies.GetListAsync(s => s.StudentId == student.Id)).Count.ShouldBe(1);
+        (await physicals.GetListAsync(p => p.StudentId == student.Id)).Count.ShouldBe(1);
+
+        await _students.DeleteAsync(student.Id);
+
+        (await guardians.GetListAsync(g => g.StudentId == student.Id))
+            .ShouldBeEmpty("监护人表含加密身份证号与电话，必须随学生一起软删");
+        (await resumes.GetListAsync(r => r.StudentId == student.Id)).ShouldBeEmpty();
+        (await rewards.GetListAsync(r => r.StudentId == student.Id)).ShouldBeEmpty();
+        (await punishments.GetListAsync(p => p.StudentId == student.Id)).ShouldBeEmpty();
+        (await subsidies.GetListAsync(s => s.StudentId == student.Id)).ShouldBeEmpty();
+        (await physicals.GetListAsync(p => p.StudentId == student.Id)).ShouldBeEmpty();
+        (await photos.GetListAsync(p => p.StudentId == student.Id)).ShouldBeEmpty();
+
+        // ★ 留痕**必须留下**，而且要比删除前更多（多了一条「删除」流水）。
+        // 这是本次删除唯一的凭证：主档已经查不到了，"谁删了哪个学生"只能靠它。
+        // 审计数据与业务数据的生命周期是**分开**的 —— 我第一版把留痕也一起软删了，
+        // 结果打红了既有用例 `删除学生_记录删除流水并保留姓名与辅号`。
+        var logsAfter = await _changeLogs.GetListAsync(l => l.StudentId == student.Id);
+
+        logsAfter.Count.ShouldBeGreaterThan(logsBefore.Count,
+            "删除动作本身也要留痕，且历史流水不能被级联删掉");
+
+        // 主档本身也读不到了（与本用例的基线口径一致）
+        (await GetRequiredService<IXjglRepository<StuStudent>>()
+                .GetListAsync(s => s.Id == student.Id))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task 删除学生_只删该学生的子表_不动别人的()
+    {
+        // 级联删除最容易写错的地方是**少写了 StudentId 条件**：
+        // 那样一次删学生会把全库同表的行都软删掉，而这种破坏性错误
+        // 在"只造一个学生"的用例里根本看不出来 —— 所以这里必须造两个。
+        SignInAsSuperAdmin();
+
+        var school = await CreateSchoolAsync("级联隔离学校");
+        var victim = await CreateStudentAsync(school.Id, "被删学生");
+        var bystander = await CreateStudentAsync(school.Id, "保留学生");
+
+        await _profile.CreateGuardianAsync(victim.Id, new CreateUpdateGuardianDto
+        {
+            Name = "被删家长", RelationCode = "1"
+        });
+
+        await _profile.CreateGuardianAsync(bystander.Id, new CreateUpdateGuardianDto
+        {
+            Name = "保留家长", RelationCode = "1"
+        });
+
+        var guardians = GetRequiredService<IXjglRepository<StuGuardian>>();
+
+        await _students.DeleteAsync(victim.Id);
+
+        (await guardians.GetListAsync(g => g.StudentId == victim.Id)).ShouldBeEmpty();
+        (await guardians.GetListAsync(g => g.StudentId == bystander.Id))
+            .ShouldHaveSingleItem().Name.ShouldBe("保留家长");
     }
 }

@@ -28,12 +28,14 @@ public interface IStudentImportExportAppService : IApplicationService
 
     /// <summary>
     /// 按当前查询条件导出（**受数据范围约束**）。
-    /// 返回 CSV 文本，含 UTF-8 BOM 以便 Excel 正确识别中文。
     ///
-    /// 名称以 <c>Get</c> 开头是**约定要求**而非风格：ABP 自动 API 靠方法名前缀判定 HTTP 动词，
-    /// 不以 Get 开头的方法会被注册成 POST，而前端是以 GET + 查询串发起下载的。
+    /// ⚠ 本方法已**移除**：导出改成「后台任务 + 下载链接」之后，
+    ///   这条同步 HTTP 出口必须消失，否则新旧两条路并存、而新的那条没人走。
+    ///   CSV 的组装搬到了 <c>Xjgl.Exporting.IStudentCsvExportBuilder</c>
+    ///   （查询逻辑一行未改），由 <c>ExportTaskAppService</c> 入队、
+    ///   <c>ExportTaskWorker</c> 以发起人的数据范围在后台执行。
+    ///   随之修掉了原来的 5000 行**静默截断**（技术债 24）。
     /// </summary>
-    Task<string> GetExportAsync(StudentQueryDto input);
 
     /// <summary>模板里的列说明（给前端做提示用）。</summary>
     List<ImportColumnDto> GetColumns();

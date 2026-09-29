@@ -18,6 +18,15 @@
     <PackageReference Include="Volo.Abp.SettingManagement.Application" Version="$(AbpVersion)" />
     <PackageReference Include="Volo.Abp.FeatureManagement.Application" Version="$(AbpVersion)" />
     <PackageReference Include="Volo.Abp.TenantManagement.Application" Version="$(AbpVersion)" />
+
+    <!--
+      债 6：显式把 AutoMapper 抬到已修复版本。
+      `Volo.Abp.AutoMapper` 声明的是 `AutoMapper >= 14.0.0`（下界、无上界），
+      而 14.0.0 命中 GHSA-rvv3-g6hj-g44x（高危）。在**直接依赖**里写死一个更高的版本
+      即可让 NuGet 解析到它，无需等 ABP 发新版。
+      ⚠ 这一条**不能删**：删掉就会退回 14.0.0，`dotnet build` 又会报 NU1903。
+    -->
+    <PackageReference Include="AutoMapper" Version="$(AutoMapperVersion)" />
   </ItemGroup>
 
 </Project>

@@ -11,13 +11,15 @@
     "build:h5": "pnpm --filter @xjgl/h5 build",
     "build:all": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "test:unit": "pnpm --filter @xjgl/pc test:unit",
     "preview": "pnpm --filter @xjgl/pc preview",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "test:e2e:headed": "playwright test --config e2e/playwright.config.ts --headed",
     "test:e2e:report": "playwright show-report e2e/playwright-report"
   },
+  "//node": ">=22.18 是下限：`test:unit` 用 `node --test` 直接跑 .ts，靠的是 Node 内置的类型擦除（22.18 起默认开启）。Node 20 会以 Unknown file extension .ts 失败。",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0"

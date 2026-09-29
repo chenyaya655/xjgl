@@ -130,7 +130,57 @@ public class SqlSugarClientFactory : ISqlSugarClientFactory, ISingletonDependenc
         {
             ApplyStringColumnConvention(column);
         }
+
+        // 7) 非空值类型列带上「与 CLR 默认值一致」的数据库默认值。
+        //
+        // 【为什么必须有】CodeFirst 给**已有数据的表**补列时执行的是
+        //     ALTER TABLE ... ADD COLUMN x boolean NOT NULL
+        // 而 PostgreSQL 要求"新增的 NOT NULL 列必须带默认值"，否则报
+        //     23502: column "x" of relation "t" contains null values
+        // 带 DEFAULT 之后 PG 会把存量行**回填**成该默认值，补列即可成功。
+        //
+        // 本项目真的撞上了：把 `stu_change_type.require_attachment` 加回来时
+        // DbMigrator 直接失败（迁移停在半路，随后 63 个集成测试全红）。
+        // 这不是"某一张表的问题"：任何"给已上线的表补一个非空列"都会踩到，
+        // 所以修在映射约定里，而不是给那一个字段打特性 ——
+        // 领域层要保持对 ORM 无感知（见 ApplyStringColumnConvention 的说明）。
+        //
+        // 【为什么取 CLR 默认值而不是业务默认值】"数据库里没有这个字段时它等于什么"
+        // 唯一不需要额外知识的答案是 C# 的 default；业务默认值（例如 IsEnabled 默认 true）
+        // 由属性初始化器在插入时表达 —— 本项目所有写入都是整行列全写，
+        // 列默认值只影响 DDL 与裸 SQL，不会被业务读到。
+        if (!column.IsPrimarykey
+            && !column.IsNullable
+            && ValueTypeDefaultLiterals.TryGetValue(property.PropertyType, out var defaultLiteral))
+        {
+            column.DefaultValue = defaultLiteral;
+        }
     }
+
+    /// <summary>
+    /// 非空值类型列的数据库默认值，字面量与 C# 的 <c>default(T)</c> 一致。
+    /// 未列出的类型（枚举等）不设默认值：拿不准的类型宁可让建表报错，
+    /// 也不要写一个语义可疑的默认值进库。
+    /// </summary>
+    private static readonly Dictionary<Type, string> ValueTypeDefaultLiterals = new()
+    {
+        [typeof(bool)] = "false",
+        [typeof(int)] = "0",
+        [typeof(long)] = "0",
+        [typeof(short)] = "0",
+        [typeof(byte)] = "0",
+        [typeof(decimal)] = "0",
+        [typeof(double)] = "0",
+        [typeof(float)] = "0",
+
+        // Guid 与时间类型的字面量**不能自带单引号**：
+        // SqlSugar 生成 DDL 时会把这些默认值当参数传给数据库，自带引号会被
+        // 一起塞进值里，PG 报 22P02: invalid input syntax for type uuid: "'0000...'"
+        // （实测踩到过）。而 bool / 数字不带引号本来就是合法字面量。
+        [typeof(Guid)] = "00000000-0000-0000-0000-000000000000",
+        [typeof(DateTime)] = "0001-01-01 00:00:00",
+        [typeof(DateTimeOffset)] = "0001-01-01 00:00:00+00"
+    };
 
     private static readonly NullabilityInfoContext NullabilityContext = new();
 

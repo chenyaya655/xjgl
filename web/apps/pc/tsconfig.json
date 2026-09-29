@@ -16,6 +16,14 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    /*
+      允许在 import 里写 `.ts` 后缀：纯函数工具的单测用 `node --test` 直接跑
+      TypeScript（只做类型擦除，不打包），而 Node 的 ESM 解析**不补后缀** ——
+      写 `./csvEncoding` 会 ERR_MODULE_NOT_FOUND。开着它，测试里就能写
+      `import { probeCsvEncoding } from './csvEncoding.ts'`，
+      类型检查与运行期两条路都通。（`noEmit` 为 true 时才允许这个选项。）
+    */
+    "allowImportingTsExtensions": true,
     "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": {

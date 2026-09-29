@@ -72,7 +72,7 @@ public static class RareCharacterText
         return v >= CjkExtAStart && v <= CjkExtAEnd;
     }
 
-    /// <summary>字符串中是否含有生僻字（前端据此决定是否启用备用字体/图片兜底）。</summary>
+    /// <summary>字符串中是否含有生僻字（前端据此启用备用字体）。</summary>
     public static bool ContainsRareCharacter(string? value)
     {
         if (string.IsNullOrEmpty(value))

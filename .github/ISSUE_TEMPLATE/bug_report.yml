@@ -1,0 +1,111 @@
+name: Bug 报告
+description: 报告一个可复现的缺陷
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告。**请先确认这是缺陷而不是"已知限制"** ——
+        README 的「已知限制」有 18 条，其中不少是**刻意如此**的（例如不做并行审批、
+        RabbitMQ 未接线）。已知限制不需要报缺陷。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索过现有 Issue，没有重复
+          required: true
+        - label: 我已读过 README 的「已知限制」，这不在其中
+          required: true
+        - label: 我报告的内容里**不含真实个人数据**（真实姓名/身份证号/手机号/学生照片）
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象
+      description: 你看到了什么？**请写具体表现**（报错原文、界面上的文字、接口返回码）。
+      placeholder: |
+        例如：学生列表页点「导出」后没有任何反应，
+        浏览器 Network 里看到 /api/app/student-import-export/export 返回 400。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      placeholder: 例如：应该下载到一个 CSV 文件。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 越具体越好。如果只在特定数据下复现，请说明数据特征。
+      placeholder: |
+        1. 用 admin 登录
+        2. 进入「学生管理」
+        3. 选中学籍状态 = 在读
+        4. 点「查询」→ 列表为空（库里有 40 个在读学生）
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交号
+      description: 运行 `git rev-parse --short HEAD`，或写明你克隆的时间。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及范围
+      multiple: true
+      options:
+        - 后端（ABP / 应用服务 / 领域）
+        - 数据库与迁移（EF Core / SqlSugar / 种子）
+        - 权限与数据范围
+        - 前端 PC 端
+        - 前端 H5 端
+        - 照片存储与上传
+        - PDF 打印 / 导出
+        - 部署与容器
+        - 测试与 CI
+        - 文档
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: |
+        请贴出关键信息。**这是最容易被跳过、却最影响排查的部分**。
+        例如"Windows 上好的、Linux 上乱码""装了 Noto 字体就好了"，
+        都是环境差异导致的。
+      value: |
+        - 操作系统：
+        - .NET SDK 版本（`dotnet --version`）：
+        - Node 版本（`node -v`）：
+        - 数据库：Docker Compose / 本机 PostgreSQL（版本）
+        - 是否装了中文字体（影响 PDF 打印）：
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 堆栈 / 截图
+      description: |
+        后端日志、浏览器控制台、接口响应体都可以。
+        ⚠️ 请先**脱敏**：去掉连接串口令、真实姓名、身份证号、手机号。
+        贴成代码块（三个反引号）比贴图更有用。
+      render: shell
+    validations:
+      required: false

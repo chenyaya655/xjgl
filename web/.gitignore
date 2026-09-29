@@ -6,3 +6,6 @@ dist-ssr/
 .vite/
 coverage/
 *.tsbuildinfo
+
+# 演示走查的截图（本地产物，不进仓库）
+e2e/demo-shots/

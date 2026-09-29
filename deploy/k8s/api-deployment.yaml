@@ -1,0 +1,169 @@
+# 河南省学籍管理系统 —— API（Deployment）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 这个 Deployment 里只有三件事是"真想清楚了"的，其余都是照现场规范补的：
+#   1. **探针挂在管道最前面**：/health 是 Host 里最先注册的终止式中间件，
+#      200 = 进程活着且数据库连得上，503 = 数据库连不上（Redis 不参与判定）；
+#   2. **状态全部移到卷上**：导出产物、降级照片、DataProtection 密钥环；
+#   3. **多副本的前提写清楚**：限流靠 Redis 共享桶、导出任务靠乐观抢占、
+#      密钥环必须共享（deploy/README.md 第 11.1 / 11.2 节）。
+#
+# 迁移与种子**不在这个 Pod 里跑**（多副本会并发建表/写种子）：
+# 见 migrate-job.yaml，先跑 Job 再滚这个 Deployment。
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: api
+spec:
+  # 先 2 副本压测再往上加（deploy/README.md 第 11.3 节的效果）。
+  # 注意：本系统的多副本是"能跑但有四处能力打折"的状态，
+  # 加副本前先确认债 25/26/27 与 Outbox 的状态。
+  replicas: 2
+  selector:
+    matchLabels:
+      app: xjgl-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # 滚动期间至少保留旧副本可用：/health 会如实反映数据库，
+      # 新副本在数据库没连上时不会被放流量
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: xjgl-api
+        app.kubernetes.io/name: xjgl
+        app.kubernetes.io/component: api
+    spec:
+      # 刻意**不加** requiredDuringSchedulingIgnoredDuringExecution 的反亲和：
+      # 单节点 k3s 上那会让第二个副本永远 Pending（而"单节点冒烟"正是本目录的目标场景）。
+      # 多节点集群里想打散副本，用 preferredDuringScheduling。
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          # ⚠ 镜像是本地构建的（deploy/README.md 第 3 章），**不在任何 registry 上**。
+          #   imagePullPolicy 必须是 IfNotPresent（或 Never），
+          #   否则 kubelet 会去 Docker Hub 拉 xjgl/api:latest 并 ImagePullBackOff。
+          #   单节点 k3s 导入镜像的办法见 deploy/k8s/README.md「冒烟步骤」。
+          image: xjgl/api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          # 非敏感配置整块注入（等价于 compose 里那一长串 environment:）
+          envFrom:
+            - configMapRef:
+                name: xjgl-config
+          env:
+            # ---- 口令：Secret 是唯一的来源 ----
+            # 连接串里的口令用 $(POSTGRES_PASSWORD) 展开拼出来，
+            # 与 compose 里 `${POSTGRES_PASSWORD}` 的作用完全一样：
+            # **口令只有一处**，不存在"Secret 改了、连接串忘了改"。
+            # （⚠ 已诚实记下：k8s 对 env value 里 $(VAR) 的展开属于 kubelet 行为，
+            #   本仓库没有在真实集群上验证过 —— 见 secret.example.yaml 的说明与
+            #   deploy/k8s/README.md 的验收清单第 0 条。）
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: xjgl-secret
+                  key: POSTGRES_PASSWORD
+            - name: Redis__Password
+              valueFrom:
+                secretKeyRef:
+                  name: xjgl-secret
+                  key: REDIS_PASSWORD
+            - name: ConnectionStrings__Default
+              value: "Host=postgres;Port=5432;Database=xjgl;User ID=xjgl;Password=$(POSTGRES_PASSWORD);Timeout=30;Command Timeout=120"
+          volumeMounts:
+            # NAS：节点上挂好的 SMB/NFS 目录，以**同路径**进容器
+            # （与 compose 的约定一致：容器里看到的路径与宿主机相同，排查不用做路径映射）
+            - name: nas
+              mountPath: /mnt/nas/xjgl
+            # 生僻字字体：节点上的目录只读挂入。
+            # ⚠ 目录不存在时这个 Pod 会**直接起不来**（hostPath type: Directory）——
+            #   刻意如此：挂一个空目录会让"字体没生效"变成一个安静的、事后才发现的问题。
+            #   先 `sudo mkdir -p /opt/xjgl/fonts/rare`（内容怎么来见 deploy/fonts.md）。
+            - name: rare-fonts
+              mountPath: /app/fonts/rare
+              readOnly: true
+            # 导出/打印产物：**必须共享**（否则"任务在 A 生成、下载打到 B"就是 404）
+            - name: exports
+              mountPath: /app/api/App_Data/exports
+            # 降级照片暂存区：NAS 熔断期间暂存的原始照片，容器重建不能丢
+            - name: photo-fallback
+              mountPath: /data/photo-fallback
+            # 数据保护密钥环：**必须共享**，否则"在 A 登录、请求落到 B 就 401"
+            - name: dataprotection-keys
+              mountPath: /app/api/App_Data/DataProtection-Keys
+          # ---- 探针 ----
+          # 200 = 进程活着 **且数据库连得上**；503 = 数据库连不上。
+          # 注意这里**不检查 Redis**：Redis 不可用是本系统设计上允许的降级，
+          # 把它算作不健康会让整个站点被摘掉。
+          #
+          # ⚠ 诚实的取舍：liveness 也探 /health，意味着数据库不可用会把 Pod 重启
+          #   （而重启治不了数据库）。deploy/README.md 第 11.3 节就是这么要求的
+          #   （"探针必须挂在管道最前面"）。若现场更希望"只摘流量、不重启"，
+          #   把 livenessProbe 换成 `tcpSocket: { port: http }` 即可 —— 这是一个
+          #   需要现场决定的取舍，清单里不替你决定，但把它写出来。
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            # 没压测过（deploy/README.md 第 12 章）。PDF 渲染与照片缩放是纯 CPU，
+            # requests 给低了会被限流，limits 给低了会 OOMKilled —— 两个都要按实测调。
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        # ⚠ 单节点 k3s 冒烟时如果没有 NAS：把这一段换成
+        #     persistentVolumeClaim:
+        #       claimName: xjgl-photo-nas
+        #   （该 PVC 在 pvc.yaml 里，照片会落在集群盘上 —— 语义与生产不同，仅供冒烟）
+        - name: nas
+          hostPath:
+            path: /mnt/nas/xjgl
+            # Directory（而不是 DirectoryOrCreate）：路径不存在就起不来。
+            # 用 DirectoryOrCreate 会在节点上悄悄建一个空目录并把它当成 NAS，
+            # 照片写进一个"没人备份、也不在 NAS 上"的地方 —— 静默降级，必须避免。
+            type: Directory
+        # ⚠ 多节点时这一段的正确做法是"每个节点都放同一份字体"
+        #   （或用 RWX 卷、或把字体打进自己的镜像变体）。§11.2 的口径是
+        #   "字体随镜像、保持各副本一致"，而字体文件因体积与授权不进镜像，
+        #   所以这里退化成 hostPath + 人工保证一致。
+        - name: rare-fonts
+          hostPath:
+            path: /opt/xjgl/fonts/rare
+            type: Directory
+        - name: exports
+          persistentVolumeClaim:
+            claimName: xjgl-exports
+        - name: photo-fallback
+          persistentVolumeClaim:
+            claimName: xjgl-photo-fallback
+        - name: dataprotection-keys
+          persistentVolumeClaim:
+            claimName: xjgl-dataprotection-keys

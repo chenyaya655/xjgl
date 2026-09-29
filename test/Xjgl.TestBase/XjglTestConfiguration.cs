@@ -37,6 +37,17 @@ public static class XjglTestConfiguration
     /// <summary>降级存储根目录。</summary>
     public static string FallbackRoot => Path.Combine(PhotoBaseDirectory, "fallback");
 
+    /// <summary>
+    /// 异动附件的存储根目录（在测试输出目录下，测试运行时可任意增删）。
+    ///
+    /// 必须显式指定：生产默认值落在**程序所在目录**的 App_Data 下，
+    /// 而集成测试的程序目录是 bin/Debug/net10.0 —— 用默认值会把附件写进构建产物目录，
+    /// 下一轮 `dotnet build` 时被清掉，表现为"用例偶发找不到文件"。
+    /// 指到 App_Data/change-attachment-tests 之后，失败也只会是断言失败，不是环境问题。
+    /// </summary>
+    public static string AttachmentRoot { get; } =
+        Path.Combine(AppContext.BaseDirectory, "App_Data", "change-attachment-tests");
+
     public static IConfigurationRoot Build()
     {
         return new ConfigurationBuilder()
@@ -55,6 +66,14 @@ public static class XjglTestConfiguration
                 ["Xjgl:Photo:BulkheadSize"] = "4",
                 ["Xjgl:Photo:TimeoutSeconds"] = "10",
 
+                // 照片导出的取数页大小设为 2（生产默认 1000）。
+                //
+                // 这条取数逻辑的价值全在"第一页取不到足够可导出的照片时要继续翻页"
+                // （债 24b），而要触发翻页必须让结果集超过一页。用真实页大小
+                // （1000）就得往共享测试库里插 1000+ 条数据 —— 慢，而且每跑一次
+                // 就多留 1000 条垃圾。把页大小调小，3 条数据就能覆盖同一条路径。
+                ["Xjgl:Photo:ExportPageSize"] = "2",
+
                 // 熔断参数调小，让测试能在几百毫秒内观察到「熔断→恢复」
                 ["Xjgl:Photo:MinimumSamples"] = "3",
                 ["Xjgl:Photo:FailureRateThreshold"] = "0.5",
@@ -64,7 +83,10 @@ public static class XjglTestConfiguration
                 // Windows 上默认微软雅黑；CI 的 Linux 镜像装 fonts-noto-cjk 并通过
                 // 环境变量 XJGL_PRINT_FONT 指定字体族。
                 ["Xjgl:Print:DefaultFontFamily"] = PrintFontFamily,
-                ["Xjgl:Print:UseSystemFonts"] = "true"
+                ["Xjgl:Print:UseSystemFonts"] = "true",
+
+                // 异动附件存储：指向测试输出目录（理由见 AttachmentRoot 的说明）
+                ["Xjgl:Change:AttachmentRootPath"] = AttachmentRoot
             })
             .Build();
     }

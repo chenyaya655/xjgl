@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 我想先把系统跑起来（不是缺陷）
+    url: https://github.com/OWNER/xjgl#快速开始
+    about: 部署/环境问题请走「部署 / 环境问题」模板；这里只是快速开始文档。
+  - name: 我想看还没做的事
+    url: https://github.com/OWNER/xjgl/blob/main/ROADMAP.md
+    about: 待办已按「难度 × 影响面」拆成可认领的条目，含一节明确的「非目标（不做）」。
+  - name: 安全漏洞
+    url: https://github.com/OWNER/xjgl/blob/main/SECURITY.md
+    about: 请不要开公开 Issue，按 SECURITY.md 的方式私下报告。

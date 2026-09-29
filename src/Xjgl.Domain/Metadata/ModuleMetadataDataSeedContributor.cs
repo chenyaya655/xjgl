@@ -55,9 +55,31 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
             Module("Permission", "权限管理", "/system/permission", "system/permission/index", "Lock", 20,
                 Action("Query", "查看"), Action("Assign", "分配权限")),
 
+            //
+            // ★ 角色管理：为什么用业务权限 `Sys.Role`，而不是 ABP 的 `AbpIdentity.Roles`
+            //
+            //   菜单是被 `MyProfileAppService.BuildMenus` 按**模块权限名**过滤的，
+            //   而它只认元数据里定义的权限（`snapshot.AllPermissionNames`）。
+            //   ABP 内置的 `AbpIdentity.Roles` **不在**元数据快照里 —— 也就是说，
+            //   若把本模块的权限名写成 `AbpIdentity.Roles`，过滤时会取到空值，
+            //   菜单**永远不会出现**（而且不报错，属于静默失效）。
+            //
+            //   代价是这里存在**两个权限层次**，必须知道：
+            //     - 菜单能否看见  → 业务权限 `Sys.Role`（本行定义，可正常授权/显示）；
+            //     - 接口能否调用  → ABP 内置 `AbpIdentity.Roles`（框架控制器自带的 `[Authorize]`）。
+            //   本页面调用的是 ABP 自带的 `/api/identity/roles`，所以**两个都要有**。
+            //   种子把 admin 全部授予；演示角色按需授予（见 DemoDataSeedContributor）。
+            //
+            //   这个坑是实测出来的：演示账号没有 `AbpIdentity.Roles` 时，
+            //   请求 `/api/identity/roles` **不是 403 而是 302 跳登录页**，
+            //   前端 axios 跟随重定向后拿到 HTML、解 JSON 抛错，
+            //   而页面里写着 `catch { roles.value = [] }` —— 于是下拉框空白、
+            //   一句提示都没有，看起来就像"这个功能不存在"。
+            Module("Role", "角色管理", "/system/role", "system/role/index", "Avatar", 25,
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除")),
+
             Module("User", "用户管理", "/system/user", "system/user/index", "User", 30,
-                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
-                Action("Import", "导入"), Action("Export", "导出")),
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除")),
 
             Module("UserProvision", "预置与激活", "/system/user-provision", "system/user-provision/index", "UserFilled", 40,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
@@ -65,10 +87,13 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
 
             Module("Code", "微代码管理", "/system/code", "system/code/index", "Collection", 50,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                // 与组织同理：实现了才声明。码表是环境相关的数据（测试调好的要搬去生产）
                 Action("Import", "导入"), Action("Export", "导出")),
 
             Module("Org", "组织管理", "/system/org", "system/org/index", "OfficeBuilding", 60,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                // 导入导出是**真的实现了**才声明（ROADMAP 第 17 条）：
+                // 组织/学校名录导入是部署前置条件 —— 上万所学校不可能靠界面一个个点。
                 Action("Import", "导入"), Action("Export", "导出"))
         });
 
@@ -88,10 +113,12 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
 
             Module("Apply", "异动申请", "/change/apply", "change/apply/index", "EditPen", 20,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                // 导出是**真的实现了**才声明（ROADMAP 第 17 条）
                 Action("Export", "导出")),
 
             Module("Audit", "异动审核", "/change/audit", "change/audit/index", "CircleCheck", 30,
                 Action("Query", "查看"), Action("Approve", "审核"), Action("RevokeApprove", "撤销审核"),
+                // 审核**流水**导出：一个审批节点一行，与申请单导出是两份不同的产物
                 Action("Export", "导出"))
         });
 
@@ -101,6 +128,14 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
             Module("Photo", "照片管理", "/photo/list", "photo/list/index", "PictureFilled", 10,
                 Action("Query", "查看"), Action("Upload", "上传"), Action("Delete", "删除"), Action("Export", "导出"),
                 Action("Compensate", "存储补偿"))
+        });
+
+        await AddSubsystemAsync("Rpt", "统计报表", "DataAnalysis", 50, new[]
+        {
+            Module("Student", "学生统计", "/report/student", "report/student/index", "PieChart", 10,
+                Action("Query", "查看")),
+            Module("Change", "异动统计", "/report/change", "report/change/index", "TrendCharts", 20,
+                Action("Query", "查看"))
         });
 
         var subsystemCount = await _subsystems.GetCountAsync();

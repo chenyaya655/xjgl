@@ -1,15 +1,25 @@
 # 河南省学籍管理系统（Xjgl）
 
+[![CI](https://github.com/OWNER/xjgl/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/xjgl/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4.svg)](https://dotnet.microsoft.com/)
+[![ABP](https://img.shields.io/badge/ABP-10.6-1B9AAA.svg)](https://abp.io/)
+
+> ⚠️ **仓库地址占位**：上面的 `OWNER` 要换成你的 GitHub 用户名（徽章与克隆地址共 3 处）。
+> 见 [`docs/GitHub发布清单.md`](docs/GitHub发布清单.md) 第三节。
+
 面向 **省 → 市 → 县区 → 学校** 四级教育行政体系的学籍管理系统，全省统一部署、统一入口登录。
 
 后端 **ABP Framework 10.6 + .NET 10**（框架表 EF Core / 业务表 SqlSugar 混合 ORM），
 前端 **Vue 3 + Element Plus**（PC / H5 / 小程序 共用一套 API），
 基础设施 **PostgreSQL 16 + Redis 7 + RabbitMQ 3.13**。
 
-> 设计文档：[`docs/学籍管理系统-总体方案.md`](docs/学籍管理系统-总体方案.md)（含每个设计决定的取舍与推演）
+> **设计文档**：[`docs/学籍管理系统-总体方案.md`](docs/学籍管理系统-总体方案.md) —— 每个设计决定的取舍与推演（约 2000 行）。
 >
-> 学习文档：从零手写本系统的全过程（约 45 章，含环境搭建、SqlSugar 集成、混合 ORM 事务、
-> 可配置审批流算法、熔断降级、测试与交付）**单独交付，不包含在本仓库中**。
+> **学习文档**：[`docs/learning/`](docs/learning/README.md) —— **从零手写本系统的全过程，49 章**（另有 1 篇导航 README，随仓库发布）。
+> 包含环境搭建、ABP + SqlSugar 混合 ORM、可配置审批流算法、断路器与降级、
+> 生僻字全链路、测试与交付。**它是为"想照着做一个类似系统的人"写的**，
+> 而不是 API 手册；如果你只想跑起来，看下面的「快速开始」就够。
 
 ---
 
@@ -49,8 +59,10 @@
 | 异动管理：异动类型、流程模板与发布、实例化与合并算法、申请、逐级审核/驳回/撤销、业务联动 | 已完成 |
 | 照片管理：NAS 主存储 + 本地降级、熔断、SHA256 秒传、批量上传、台账、缺照片名单、补偿回放、存储健康度、**缩略图（ImageSharp）与取图接口（ETag + 304）**、**打包导出（zip + 清单）**、**令牌桶限流** | 除 MQ 削峰外已完成（削峰需先做 Outbox） |
 | 前端 PC 端：登录、动态路由与菜单、工作台、学生列表、照片管理、异动三页、模块占位页 | 已完成 |
-| H5 / 微信小程序 / 教育系统内 SSO（授权码模式） | 待做 |
-| 报表与大屏、压测调优、K8s 编排 | 待做 |
+| H5 端：登录、待办审核、拍照上传、我的（独立 Vite 应用，hash 路由） | 已完成（业务功能远少于 PC 端） |
+| 微信小程序 / 教育系统内 SSO（授权码模式） | 待做 |
+| 统计报表：学生统计 / 异动统计（`/api/app/statistics/*` + 两个报表页，受数据范围约束） | 已完成 |
+| 大屏、生产量级压测调优、K8s 编排 | 待做 |
 
 ---
 
@@ -63,11 +75,11 @@
 | 框架 ORM | **EF Core** 10 + Npgsql | ABP 自带模块（Identity / OpenIddict / 权限 / 审计）继续用 EF Core |
 | 数据库 | **PostgreSQL 16** | UTF-8 原生支持全部 Unicode，生僻字无需额外处理 |
 | 缓存 | **Redis 7** | 分布式缓存与锁；不可用时自动降级为进程内缓存并短路跳过 |
-| 消息队列 | **RabbitMQ 3.13** | 分布式事件（照片削峰、通知）— 已接入，Outbox 待做 |
+| 消息队列 | **RabbitMQ 3.13** | 编排里有，但**应用当前刻意未注册**（原因见「已知限制」第 3 条，一句话：Outbox 之前接 MQ 会导致静默数据丢失） |
 | 照片存储 | **NAS**（SMB/NFS 挂载为目录） | 数据库只存相对路径与元数据 |
-| 前端 | **Vue 3 + Vite 7 + TypeScript + Element Plus** | PC 管理端；移动端与小程序共用 API |
-| 认证 | **OpenIddict**（OIDC） | 密码模式供自有前端；授权码模式供教育系统内其它系统 SSO |
-| 测试 | **xunit v3** + Shouldly | 单元测试不碰数据库；集成测试打真实 PostgreSQL |
+| 前端 | **Vue 3 + Vite 7 + TypeScript + Element Plus** | PC 管理端（动态路由）+ H5 端；共用一套 API 包 `@xjgl/api` |
+| 认证 | **OpenIddict**（OIDC） | 密码模式供自有前端；授权码模式供教育系统内其它系统 SSO（**未打通**） |
+| 测试 | **xunit v3** + Shouldly + Playwright | 单元测试不碰数据库；集成测试打真实 PostgreSQL；前端另有真浏览器 E2E |
 
 ---
 
@@ -129,16 +141,40 @@ corepack pnpm@9.15.0 --filter @xjgl/pc dev     # http://127.0.0.1:5173
 
 ---
 
+## 构建时会看到的两条警告（正常，不是问题）
+
+第一次 `dotnet build` 会输出两条来自 **ImageSharp** 的提示：
+
+```
+warning : No Six Labors license found. Set $(SixLaborsLicenseKey) ...
+warning : Please obtain a license from https://sixlabors.com/pricing/
+```
+
+**这是 ImageSharp 4.x 的商业许可声明，不是代码缺陷。** 说明一下，因为政务/企业采购
+时一定会被问到：
+
+| 依赖 | 许可证 | 什么时候需要付费 | 怎么替换 |
+|---|---|---|---|
+| **SixLabors.ImageSharp** 4.x | Six Labors Split License | 组织年收入 **≥ 100 万美元**时需购买商业许可 | 只需改 `src/Xjgl.Imaging/`（应用层依赖 `IImageProcessor` 接口） |
+| **QuestPDF**（学籍卡/花名册） | QuestPDF Community License | 同上（年收入 ≥ 100 万美元） | 只需改 `src/Xjgl.Reporting/`（应用层依赖两个渲染接口） |
+
+- 小型组织、个人、非营利用途**可以免费使用**；
+- 有商业许可时，把 key 放进 `SixLaborsLicenseKey` 属性或项目根放 `sixlabors.lic` 即可消除警告；
+- 两个依赖都被**隔离在独立项目 + 接口**后面，替换成本是改一个项目 + 跑测试，
+  不需要动业务代码 —— 这是刻意的架构选择。
+
+---
+
 ## 测试
 
 ```bash
 # 单元测试：177 个，不依赖数据库（含 PDF 渲染与图像缩放）
 dotnet run --project test/Xjgl.Domain.Tests
 
-# 集成测试：228 个，打真实 PostgreSQL
+# 集成测试：268 个，打真实 PostgreSQL
 dotnet run --project test/Xjgl.Application.Tests
 
-# 端到端：26 个用例（Playwright + 真实 Chromium，自动拉起前后端，约 1 分钟）
+# 端到端：50 个用例（Playwright，chromium + h5 两个项目，自动拉起前后端）
 cd web && corepack pnpm@9.15.0 install && corepack pnpm@9.15.0 exec playwright install chromium
 corepack pnpm@9.15.0 test:e2e        # 加 :headed 可以看着它点，出报告用 test:e2e:report
 
@@ -158,11 +194,24 @@ node tools/audit-routes.mjs http://127.0.0.1:44300/swagger/v1/swagger.json
 > **直接运行测试可执行程序是确定可用的方式**（CI 也这么做）。
 > 两种方式都等价：单元测试项目与集成测试项目本身就是可执行程序（`OutputType=Exe`）。
 
-集成测试默认连 `Host=127.0.0.1;Port=5432;Database=xjgl_test`，可用环境变量覆盖：
+集成测试的连接串优先取环境变量 `XJGL_TEST_CONNECTION`：
 
 ```bash
-XJGL_TEST_CONNECTION="Host=...;Database=...;User ID=...;Password=..." \
-  dotnet run --project test/Xjgl.Application.Tests
+# ⚠️ 必须给：代码里的兜底值是 127.0.0.1:55432（作者本机沙箱的端口），
+#    而 docker-compose.dev.yml 起的是 5432，所以照抄上面命令直接跑会连不上。
+#    下面这条指向 README 第 1 步起的那个 PostgreSQL，可以直接用：
+export XJGL_TEST_CONNECTION="Host=127.0.0.1;Port=5432;Database=xjgl_test;User ID=xjgl;Password=Xjgl@Dev2026"
+dotnet run --project test/Xjgl.Application.Tests
+```
+
+> 为什么兜底值不改成 5432：开发沙箱与常规开发机用的端口不同，
+> 兜底值只能照顾其中一边。**CI 与本文档都显式注入环境变量**，
+> 因此"不给变量时的行为"不是任何一条受支持的路径 —— 请始终显式指定。
+
+数据库要先建好并跑过迁移：
+
+```bash
+dotnet run --project src/Xjgl.DbMigrator        # 用同一个库（把 appsettings 指向 xjgl_test，或用 ConnectionStrings__Default 覆盖）
 ```
 
 **端到端测试（`web/e2e`）覆盖什么**：
@@ -172,7 +221,13 @@ XJGL_TEST_CONNECTION="Host=...;Database=...;User ID=...;Password=..." \
 | `01-login` | 未登录重定向、密码错误不跳转、登录后菜单可见、**刷新页面后会话仍有效**、激活页公开 |
 | `02-student` | 查询 + 掩码身份证、详情抽屉新增监护人并留痕、**打印并校验下载到的确是 PDF**、导出 CSV、导入对话框 |
 | `03-photo` | 台账页签、**批量上传对话框 + 学校下拉可选中**、**上传后台账显示缩略图**、打包导出对话框 |
-| `04-modules` | 11 个业务模块逐个打开并渲染、左侧菜单与后端元数据一致 |
+| `04-modules` | 业务模块逐个打开并渲染、左侧菜单与后端元数据一致 |
+| `05-subtable-forms` | 学生档案 6 张子表的表单交互 |
+| `06-report` | 统计报表页：按维度统计、码值被翻译成中文 |
+| `07-sso` | 授权码模式 SSO 的现状（**未打通**，用例固化的是当前真实行为，不是期望行为） |
+| `90-demo-walkthrough` | 演示走查：登录→学生→照片→异动→统计→系统管理，逐步截图到 `e2e/demo-shots/` |
+| `91-role-management` | 角色增删改、给角色分配权限、**读取失败时必须明确报错而不是静默留空** |
+| `h5-smoke`（独立 `h5` 项目） | H5 端能独立启动、三页签切换、窄屏无横向溢出、hash 路由刷新不 404 |
 
 它守的是**集成测试与类型检查都看不见**的那一层。本项目第一次跑通它就抓出三个真缺陷：
 刷新深链 404（路由守卫）、导出按钮报 400（`MaxResultCount` 超 ABP 上限 1000）、
@@ -216,7 +271,7 @@ web/
   apps/pc/                     PC 管理端（Vue 3 + Element Plus）
 deploy/                        开发（WSL2）与生产（Linux + Docker）编排、Dockerfile、nginx 配置、部署手册
 tools/                         开发辅助脚本（前端路由核对、部署一致性核对、NuGet 代理）
-docs/                          设计与交付文档（学习文档单独交付，不在仓库内）
+docs/                          设计与交付文档（含 learning/ 学习文档、articles/ 技术文章）
 ```
 
 ---
@@ -253,28 +308,50 @@ docs/                          设计与交付文档（学习文档单独交付�
    原因是实测发现：MQ 不可达时，身份模块的用户/角色写操作会发布分布式事件，
    而 ABP 的工作单元在**响应写出之后**才提交 —— 发布失败导致事务回滚，
    于是**接口返回 200、数据库里却没有数据**（静默数据丢失，有堆栈与库表证据）。
-   在实现 **Outbox**（事件与业务数据同事务落库、后台重发）之前，
+   在 **Outbox 真正跑起来**（事件与业务数据同事务落库、后台重发）之前 ——
+   当前 Outbox 的**表与分发器已就位**（`XjglDbContext` 实现 `IHasEventOutbox` / `IHasEventInbox`，
+   迁移 `AddEventOutboxInbox` 已建表），但 `src/` 里**没有任何生产代码往它发事件**
+   （一处 `PublishAsync` 调用也没有）：
    "有 MQ 配置但 MQ 不通"比"暂时不接 MQ"更危险。
    当前代码没有任何功能依赖 MQ，因此移除不损失能力，还顺带消除了登录时的 MQ 连接超时。
-4. **照片缩略图尚未生成**（`stu_photo.width/height` 恒为 0），列表页加载原图。
+4. ~~**照片缩略图尚未生成**~~ **已实现**：上传时用 ImageSharp 生成缩略图，
+   取图接口支持 ETag + 304。**历史数据例外**：缩略图是后加的，
+   此前上传的照片 `ThumbnailPath` 为空 —— 取图接口会**回落返回原图**
+   （页面不会白屏），但流量没省下来。需要时跑一次回填任务
+   （按 `ThumbnailPath is null` 扫描补生成），见第 13 条。
 5. **生僻字字体需要自行放置**：`web/apps/pc/public/fonts/` 下的 Plangothic 分片文件
    体积较大，**不进仓库**，缺失时回落到系统字体（生僻字显示为方块，功能不受影响）。
-6. **H5 与微信小程序尚未开始**；授权码模式 SSO 未接。
-7. **数据范围目前按组织层级自动解析**：省厅=全省、市/县/校=本级及下级、未关联组织=什么都看不到，
-   内置 admin 角色旁路。**按角色单独配置数据范围**（`sys_role_data_scope` 表）尚未实现，
-   因此"某市局只看本市不看他下属县"这类例外暂时无法配置。
-   实现位置：`src/Xjgl.Domain/Organizations/UserDataScope.cs` 与 `UserDataScopeProvider.cs`。
-8. **删除学生不会级联删除子表行**：监护人/简历/奖励/处分/资助/体检这六张表的数据会留下来，
-   只是通过学生查不到（成为孤儿行）。清理脚本或直接统计子表时要注意这一点。
-9. ~~**前端尚无浏览器级端到端测试**~~ **已补上**：`web/e2e`（Playwright + 真实 Chromium，27 个用例，
-   自动拉起前后端，整套约 1 分钟），覆盖登录与会话、学生档案（含**下载并校验 PDF 字节**）、
-   照片管理（含**缩略图的 Blob 链路**）与 11 个模块冒烟。**它第一次跑通就抓出三个集成测试看不见的缺陷**：
+6. ~~**H5 与微信小程序尚未开始**~~ **H5 已实现**：`web/apps/h5` 是独立的 Vite 应用
+   （5174，hash 路由），登录 + **待办审核 / 拍照上传 / 我的**三个页签，由 `h5` 项目下
+   4 条端到端用例守着；但它**业务功能远少于 PC 端**（只有教师最常用的两条路径）。
+   **微信小程序仍未开始**：只留了协议层口子（自定义 grant type `urn:wechat:miniprogram`）。
+   **授权码模式 SSO 未接**（现状见第 9 条的 `07-sso` 用例）。
+7. **数据范围**：默认按组织层级自动解析 —— 省厅=全省、市/县/校=本级及下级、
+   未关联组织=什么都看不到，内置 admin 角色旁路。
+   **「某市局只看本市不看他下属县」这类例外现在可以配了**：`sys_role_data_scope` 表
+   （一个角色一行，**没有配置行 = 沿用层级推导**，所以升级后现有角色行为不变），
+   可配「全部数据 / 本级及下级 / 仅本级 / 仅本人」四种；
+   多个角色都配了范围时**取最宽的那个**（与权限的加法语义一致）。
+   **两个遗留**：① 前端的「数据范围」配置入口；② 「自定义组织集合」暂不支持 ——
+   各列表查询的 SQL 谓词按单一根路径生成，落不了多个根，
+   若接受配置再退化成默认范围就会**比配置更宽**，因此目前明确拒绝（见 ROADMAP 第 21 条）。
+   实现位置：`src/Xjgl.Domain/Organizations/UserDataScopeProvider.cs`、
+   `SysRoleDataScope.cs`，以及 `src/Xjgl.Domain.Shared/Organizations/DataScopes.cs`。
+8. ~~**删除学生不会级联删除子表行**~~ **已实现级联软删**：删除学生时，
+   `StudentAppService.CascadeSoftDeleteAsync`（`src/Xjgl.Application/Students/StudentAppService.cs`）
+   把监护人 / 简历 / 奖励 / 处分 / 资助 / 体检这六张子表的行一并软删，不再留孤儿行。
+9. ~~**前端尚无浏览器级端到端测试**~~ **已补上**：`web/e2e`（Playwright + 真实 Chromium，
+   **50 个用例**（10 个规格文件，`chromium` 与独立 `h5` 两个项目），自动拉起前后端），覆盖登录与会话、学生档案
+   （含**下载并校验 PDF 字节**）、照片管理（含**缩略图的 Blob 链路**）、
+   **6 张学生子表的表单增删改**、统计报表、角色管理、演示走查与 H5 冒烟。**它第一次跑通就抓出三个集成测试看不见的缺陷**：
    刷新深链 404（路由守卫）、导出按钮 400（前端传了 `MaxResultCount: 5000`，而 ABP 上限是 1000）、
    以及**学校下拉把 6,789 所学校全渲染成 DOM 节点、主线程卡死 100 秒**（已改为虚拟滚动下拉）。
-   **尚未覆盖**：H5 端、非 Chromium 内核、6 张学生子表的增删改。
+   **尚未覆盖**：非 Chromium 内核、真实微信 WebView。
 10. **码值类下拉框必须从码表取**：本轮抓到两处前端手写英文名（学籍状态过滤 → 静默返回空列表；
-    异动前后状态 → 审批后把非法值写进学生学籍状态）。后端已加码值校验，前端也改成取码表，
-    但**还没有机制强制**新代码也这么做（计划抽 `useCodeOptions` 并写进 review 清单）。
+    异动前后状态 → 审批后把非法值写进学生学籍状态）。现已统一收敛到
+    `useCodeOptions(categoryCode)`（`web/apps/pc/src/composables/useCodeOptions.ts`），
+    并把"前端不得手写码值"写进 [`CONTRIBUTING.md`](CONTRIBUTING.md) 第 5 节。
+    **但它仍是 review 约定、不是编译期强制** —— 新代码手写字面量依然不会被工具拦住。
 11. **学籍卡/花名册打印依赖服务器上有中文字体**：PDF 里会**内嵌**字体（`FontFile2`），
     但前提是渲染时能找到中文字体，否则会直接报错（刻意不给"满是方块的学籍卡"）。
     Windows 服务器默认用微软雅黑；Linux/容器部署需 `apt-get install fonts-noto-cjk`
@@ -285,22 +362,35 @@ docs/                          设计与交付文档（学习文档单独交付�
     应用层依赖的是 `IStudentCardPdfRenderer` / `IStudentRosterPdfRenderer` 两个接口。
     同理，**图像处理用 ImageSharp 4.x**（Six Labors Split License，开源/小微组织免费），
     替换只需改 `Xjgl.Imaging`（应用层依赖 `IImageProcessor`）。
-13. **老照片没有缩略图**：缩略图是本轮才加的，此前上传的照片 `ThumbnailPath` 为空 ——
-    取图接口会**回落返回原图**（页面不会白屏），但流量没省下来。
-    需要的话跑一次性回填任务（按 `ThumbnailPath is null` 扫描补生成）。
-14. **上传内容只校验扩展名**：扩展名在白名单内即收（改成 `.jpg` 的文本文件也会入库，
-    只是没有尺寸与缩略图）。计划改为"探测失败即拒绝"，需同步改造照片测试用的合成数据。
-15. **照片导出与花名册打印都是"请求内同步生成"**：zip/PDF 在内存里拼好再一次性返回。
-    照片导出有 `MaxCount` 闸门（上限 2000 张），但仍会占用请求线程与内存；
-    计划统一改为「后台任务 + 生成文件 + 下载链接」（与导入导出一并做）。
+13. ~~**老照片没有缩略图**~~ **已补上后台回填**：`PhotoThumbnailService` +
+    `PhotoThumbnailWorker`（`src/Xjgl.Application/Photos/`、`src/Xjgl.HttpApi.Host/Photos/`）
+    周期按 `ThumbnailPath is null` 扫描补生成，与上传路径共用同一段生成逻辑。
+    回填完成前取图接口仍会**回落返回原图**（页面不会白屏，但流量没省下来）。
+14. ~~**上传内容只校验扩展名**~~ **已改为内容真实性校验**：`PhotoUploadService` 调
+    `IImageProcessor.ProbeAsync`（`src/Xjgl.Imaging` 用 ImageSharp `Image.IdentifyAsync`）
+    探测字节内容，**探测失败即拒绝**并返回"文件内容不是可识别的图片"的明确错误。
+    探测只解字节内容、**完全不碰存储**，因此 NAS 抖动不会被误判成内容非法。
+15. ~~**照片导出与花名册打印都是"请求内同步生成"**~~ **已后台化**：照片 zip / 学生名单 CSV /
+    学籍卡 PDF / 花名册 PDF 四种产物统一走 `sys_export_task` + `ExportTaskWorker`
+    （`src/Xjgl.HttpApi.Host/Exporting/ExportTaskWorker.cs`、
+    `src/Xjgl.Application/Exporting/ExportTaskRunner.cs`），请求只写一行任务记录就返回，
+    前端轮询进度、从下载接口取产物；原来的同步接口已删除（实测 404）。
+    **打包本身也已不再占内存**：`IPhotoExportService.ExportToAsync(input, Stream)`
+    让后台任务经临时文件流式写入产物存储，回归测试
+    `导出_流式重载产出同样的压缩包且不占内存`。
 16. **部署后请检查日志里有没有「分布式缓存主实现不可用」**：
     本系统的分布式缓存是「Redis 主 + 内存兜底」的容错装饰器 —— 这是优点（Redis 挂了不影响使用），
     但代价是**配置错了不会报错，只会静默降级成单机缓存**。
     本机开发时就踩到过：`appsettings.json` 里的 Redis 密码与实际运行的 Redis 不一致，
     系统一直安静地用内存缓存跑着（登录、权限缓存都正常，看不出来）。
     多副本部署前务必确认真实连上了 Redis（限流、缓存共享都依赖它）。
-17. **限流是"每实例"精度**：令牌桶状态在分布式缓存里，但"读-算-写"只在进程内加锁，
-    多副本部署时实际速率上限约为 N 倍。严格全局限流需要 Redis Lua 脚本（见技术债）。
+17. ~~**限流是"每实例"精度**~~ **已改为 Redis Lua 原子限流**：
+    `RedisLuaTokenBucketRateLimiter`（`src/Xjgl.HttpApi.Host/RateLimiting/`）把"读-算-写"
+    放进一段 Lua 脚本、在 Redis 里原子执行，多副本部署不再被放大；时间基准取 Redis 的
+    `TIME`（避免各实例时钟偏移）。限流维度也从一个"用户"扩到 **user / ip / global**
+    三个（IP 维度正是防"某校整栋楼共用一个出口 IP"的那一维），策略值可在
+    `Xjgl:RateLimit:*` 配置里按环境调。**Redis 不可用时会降级**回进程内 + 分布式缓存的
+    老实现 —— 只有在这种降级状态下才回到"每实例精度"。
 18. **大集合下拉必须用虚拟滚动**（与第 9 条的第三个缺陷同源）：凡是可能上万条的下拉
     （学校、班级、教师……）一律走 `el-select-v2`（本仓库已抽成 `components/SchoolSelect.vue`）。
     普通 `el-select` 会为每一条渲染一个真实 DOM 节点 —— 全省学校数量下，只打开一个对话框
@@ -315,11 +405,16 @@ docs/                          设计与交付文档（学习文档单独交付�
 
 ```bash
 dotnet build Xjgl.sln                       # 0 错误
-dotnet test test/Xjgl.Domain.Tests          # 全绿
-dotnet test test/Xjgl.Application.Tests     # 全绿（需要本地数据库）
-cd web && corepack pnpm@9.15.0 --filter @xjgl/pc run typecheck
-cd web && corepack pnpm@9.15.0 test:e2e      # 端到端（自动拉起前后端）
+dotnet run --project test/Xjgl.Domain.Tests        # 单元测试全绿（不依赖数据库）
+dotnet run --project test/Xjgl.Application.Tests   # 集成测试全绿（需要本地数据库）
+cd web && corepack pnpm@9.15.0 -r typecheck        # 三端类型检查（PC / H5 / 共享包）
+cd web && corepack pnpm@9.15.0 --filter @xjgl/pc run test:unit
+node tools/check-permissions-sync.mjs       # 权限码 / 码类别 / 操作类型三处约定
+cd web && corepack pnpm@9.15.0 test:e2e     # 端到端（自动拉起前后端）
 ```
+
+> **为什么不用 `dotnet test`**：测试项目是 xunit v3 + Microsoft.Testing.Platform，
+> 详见上面「测试」一节。**前端需要 Node ≥ 22.18**（`test:unit` 用 `node --test` 跑 `.ts`）。
 
 代码风格约定：注释写**"为什么"**而不是"这行在做什么"；涉及取舍的地方要说明
 "不这么做会怎样"。这是本仓库注释密度偏高且长句较多的原因，也是它最值得读的部分。
@@ -349,5 +444,7 @@ for rare CJK characters (Unicode Extended-B and beyond); and a NAS photo pipelin
 hand-written circuit breaker, bulkhead, timeout, local degradation and background replay.
 
 Design document (Chinese): [`docs/学籍管理系统-总体方案.md`](docs/学籍管理系统-总体方案.md).
-A step-by-step tutorial series (about 45 chapters) is delivered separately and is **not**
-part of this repository.
+A step-by-step tutorial series (**49 chapters** + a navigation README, Chinese) is in
+[`docs/learning/`](docs/learning/README.md) — it walks through building this system
+from an empty directory, including the hybrid-ORM boundary, the approval-flow
+instantiation algorithm, and rare-CJK-character handling end to end.

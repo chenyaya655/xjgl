@@ -1,5 +1,6 @@
 using Shouldly;
 using Volo.Abp;
+using Xjgl.Exporting;
 using Xjgl.Organizations;
 using Xjgl.Text;
 using Xunit;
@@ -23,12 +24,18 @@ public class StudentImportExportTests : XjglIntegrationTestBase
     private readonly IStudentImportExportAppService _io;
     private readonly IStudentAppService _students;
     private readonly IOrgAppService _orgAppService;
+    private readonly IStudentCsvExportBuilder _csvExport;
 
     public StudentImportExportTests()
     {
         _io = GetRequiredService<IStudentImportExportAppService>();
         _students = GetRequiredService<IStudentAppService>();
         _orgAppService = GetRequiredService<IOrgAppService>();
+
+        // 导出改成任务式之后，CSV 的组装搬到了 IStudentCsvExportBuilder
+        // （原来的 GetExportAsync 已经没有 HTTP 出口，见 ExportTaskAppService）。
+        // 断言本身一条没改 —— 这里要守的仍是"带 BOM、身份证脱敏、按学校不串校"。
+        _csvExport = GetRequiredService<IStudentCsvExportBuilder>();
     }
 
     // ------------------------------------------------------------------
@@ -245,10 +252,10 @@ public class StudentImportExportTests : XjglIntegrationTestBase
             Content = BuildCsv(Row(school.Code, "导出学生", NewIdCard()))
         });
 
-        var csv = await _io.GetExportAsync(new StudentQueryDto
+        var csv = (await _csvExport.BuildAsync(new StudentQueryDto
         {
             SchoolOrgId = school.Id, MaxResultCount = 100
-        });
+        })).Csv;
 
         csv[0].ShouldBe('\uFEFF', "导出给 Excel 打开，必须带 BOM");
 
@@ -277,10 +284,10 @@ public class StudentImportExportTests : XjglIntegrationTestBase
                 Row(schoolB.Code, "乙校学生", NewIdCard()))
         });
 
-        var csv = await _io.GetExportAsync(new StudentQueryDto
+        var csv = (await _csvExport.BuildAsync(new StudentQueryDto
         {
             SchoolOrgId = schoolA.Id, MaxResultCount = 100
-        });
+        })).Csv;
 
         csv.ShouldContain("甲校学生");
         csv.ShouldNotContain("乙校学生");

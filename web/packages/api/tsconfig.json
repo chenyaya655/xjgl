@@ -1,0 +1,32 @@
+{
+  /*
+    共享 API 包（@xjgl/api）自己的类型检查配置。
+
+    【为什么需要一个独立的 tsconfig】
+    两个应用（PC / H5）都把 `src/index.ts` 当源码直接 import，所以它们跑
+    `vue-tsc` 时会**顺带**检查到这个包里被 import 的部分 —— 于是"这个包有没有问题"
+    这件事长期依赖"应用恰好 import 了哪些文件"。没被任何应用用到的导出
+    （例如某个只有类型定义、暂时没人调的函数）就完全没人检查。
+
+    这里显式给一份配置，让 CI 能对**整个包**单独跑一次类型检查。
+    选项与 apps/pc/tsconfig.json 对齐，避免出现"应用里能过、这里过不了"的假失败。
+  */
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "useDefineForClassFields": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"]
+}

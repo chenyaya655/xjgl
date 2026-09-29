@@ -1,0 +1,101 @@
+# 河南省学籍管理系统 —— 非敏感配置（ConfigMap）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 这些键从哪来
+#
+# 以 `src/Xjgl.HttpApi.Host/appsettings.json` 为唯一事实来源，与
+# `deploy/docker-compose.prod.yml` 的 `environment:` 段一一对应
+# （`A:B` → 环境变量 `A__B`，这是 .NET 的配置约定，不是本项目发明的）。
+# `tools/verify-deploy.mjs` 会核对"必填配置键"在生产编排里是否都有对应环境变量 ——
+# 本文件也在它的核对范围内（第 8 节）。
+#
+# 【为什么不直接用 envFrom 把 appsettings.json 也塞进来】
+# 应用在容器里的内容根是 /app/api（见 api.Dockerfile 与 Program.cs），
+# 镜像里已经带了一份 appsettings.json。这里只覆盖**生产必须与开发不同**的键；
+# 其余的（SqlSugar、限流参数、熔断参数…）用镜像里的默认值。
+# 千万不要以为"没写在这里的键就没有配" —— 它们走的是 appsettings.json 的默认值。
+#
+# 【口令为什么不在这里】
+# 数据库连接串与 Redis 口令在 `secret.example.yaml` 里，通过
+# `secretKeyRef` 注入。ConfigMap 是明文的（`kubectl get cm -o yaml` 就能看到），
+# 把口令放进来等于把它写在墙上。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xjgl-config
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/part-of: xjgl
+data:
+  # ---- 运行环境 ----
+  # 容器里没有 Windows 字体，也没有开发用的 appsettings.Development.json
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  TZ: "Asia/Shanghai"
+
+  # ---- 【必须替换】对外地址 ----
+  # 这 6 个值必须换成**浏览器实际访问的地址**（Ingress 的 host 或域名），
+  # 而且必须互相对得上：
+  #   App__SelfUrl == AuthServer__Authority == Swagger 的 RootUrl
+  #   App__ClientUrl == 前端应用的 RootUrl
+  # 配错的典型表现不是"起不来"，而是**登录成功后所有接口 401/403**
+  # （令牌的签发者 issuer 与校验时用的 Authority 不是一个字符串）。
+  App__SelfUrl: "https://xjgl.example.edu.cn"
+  App__ClientUrl: "https://xjgl.example.edu.cn"
+  App__CorsOrigins: "https://xjgl.example.edu.cn"
+  AuthServer__Authority: "https://xjgl.example.edu.cn"
+  # 生产必须 HTTPS。用 http 做冒烟时要临时改成 "false"（见 README 的"先决条件"一节），
+  # 改完记得改回来 —— 这个开关关掉之后，令牌在明文链路上传输。
+  AuthServer__RequireHttpsMetadata: "true"
+  OpenIddict__Applications__Xjgl_App__RootUrl: "https://xjgl.example.edu.cn"
+  OpenIddict__Applications__Xjgl_Swagger__RootUrl: "https://xjgl.example.edu.cn"
+
+  # ---- Redis（缓存 + 令牌桶限流的桶状态）----
+  # ⚠ 口令**不要**写进这个连接串：StackExchange.Redis 用逗号分隔参数，
+  #   而口令本身可能含逗号（本项目 dev 环境的 Redis 口令就含逗号），
+  #   写成 password=xx,,abortConnect=false 会被截断 → WRONGPASS，
+  #   而报错只说"认证失败"，完全看不出根因。口令走 Secret 的 Redis__Password
+  #   （见 api-deployment.yaml），由 XjglHttpApiHostModule.ConfigureRedis 应用。
+  Redis__Configuration: "redis:6379,abortConnect=false"
+
+  # ---- 照片存储 ----
+  # NAS 是**节点上已经挂好的**目录，以同路径进 Pod（与 compose 的约定一致：
+  # 容器里看到的路径与宿主机一致，排查时不用在脑子里做路径映射）。
+  # 单节点 k3s 冒烟时若没有 NAS，可把 api-deployment.yaml 里的 nas 卷
+  # 换成 pvc.yaml 里的 xjgl-photo-nas（README 有说明）—— 但那就是"照片落在集群盘上"，
+  # 与生产的 NAS 语义不同，别把冒烟环境当生产用。
+  Xjgl__Photo__NasRoot: "/mnt/nas/xjgl"
+  Xjgl__Photo__FallbackRoot: "/data/photo-fallback"
+  # 多副本下每个副本都会跑补偿任务（扫表 + 回放，幂等，最坏是白干一次）；
+  # 要收敛成"只有一个实例跑"，把某个副本的这个值设为 "false"。
+  Xjgl__Photo__CompensationEnabled: "true"
+
+  # ---- 打印字体 ----
+  # 中文字体随镜像安装（fonts-noto-cjk，见 api.Dockerfile）。
+  # UseSystemFonts 保持 true 才能用到它 —— 设成 "false" 之后 QuestPDF **只认**
+  # 随应用部署的字体文件（FontDiscoveryPaths 里目前只有生僻字目录），
+  # 镜像里的 Noto 是"系统字体"，会被一起排除，结果是**常用汉字也报缺字形**。
+  # 真要用 false，必须把基字体也放进一个发现目录。
+  Xjgl__Print__DefaultFontFamily: "Noto Sans CJK SC"
+  Xjgl__Print__UseSystemFonts: "true"
+  # 生僻字字体目录：由节点上的目录（默认 /opt/xjgl/fonts/rare）只读挂入。
+  # 字体文件不进仓库、也不进镜像（体积 + 授权），
+  # "从哪来、放哪、怎么验证生效"见 deploy/fonts.md。
+  Xjgl__Print__RareCharacterFontDirectory: "/app/fonts/rare"
+  # 必须与字体文件内部的**家族名**完全一致（Plangothic 静态版 P1 的家族名）。
+  # 对不上时不会报错：QuestPDF 会静默换一个字体族，然后在画字形那一步失败
+  # （抛"缺少可用字体/字形"，看起来像"字体没装"）。用 fc-scan 核对，见 deploy/fonts.md。
+  Xjgl__Print__RareCharacterFontFamily: "Plangothic P1"
+
+  # ---- 导出/打印产物 ----
+  # 显式写出来，是为了与 PVC 挂载点对齐（不写时的默认值恰好也是
+  # /app/api/App_Data/exports，因为内容根被钉在程序目录 —— 但那是"恰好"，
+  # 而这里必须确保产物落在**挂得住卷**的目录上）。
+  Xjgl__Export__ArtifactRoot: "/app/api/App_Data/exports"
+  # 多副本下导出任务是"扫表 + 乐观抢占"，重复执行最坏是白干一次（产物幂等）；
+  # 要收敛成单实例执行，把某个副本设为 "false"（注意别把所有副本都关掉）。
+  Xjgl__ExportTask__Enabled: "true"

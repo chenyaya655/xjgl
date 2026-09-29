@@ -457,12 +457,30 @@ public class UserProvisionAppServiceTests : XjglIntegrationTestBase
             Name = "测试省厅"
         });
 
+        // 补齐"市 → 县"两级：学校只能挂在县区下（见 OrgAppService.EnsureHierarchy）。
+        // 本用例查的是**子树**，链条加长不影响断言（省厅仍在最上层）。
+        var city = await _orgs.CreateAsync(new CreateUpdateOrgDto
+        {
+            OrgType = OrgTypes.City,
+            Code = "9" + Guid.NewGuid().ToString("N")[..8],
+            Name = "测试市局",
+            ParentId = province.Id
+        });
+
+        var county = await _orgs.CreateAsync(new CreateUpdateOrgDto
+        {
+            OrgType = OrgTypes.County,
+            Code = "9" + Guid.NewGuid().ToString("N")[..8],
+            Name = "测试县局",
+            ParentId = city.Id
+        });
+
         var school = await _orgs.CreateAsync(new CreateUpdateOrgDto
         {
             OrgType = OrgTypes.School,
             Code = "9" + Guid.NewGuid().ToString("N")[..8],
             Name = "测试学校",
-            ParentId = province.Id
+            ParentId = county.Id
         });
 
         var (schoolRecord, _) = await PredefineAsync(school.Id, realName: "下属学校教师");

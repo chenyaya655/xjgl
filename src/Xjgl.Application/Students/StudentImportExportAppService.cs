@@ -26,20 +26,7 @@ namespace Xjgl.Students;
 [Authorize]
 public class StudentImportExportAppService : XjglAppService, IStudentImportExportAppService
 {
-    /// <summary>导出上限。超过这个量级的导出应当走"后台任务 + 文件下载"（见方案文档 P4 余量）。</summary>
-    private const int ExportRowLimit = 5000;
-
-    /// <summary>
-    /// 单页取数上限。
-    ///
-    /// **ABP 对单次请求的 MaxResultCount 有硬上限（默认 1000）**，
-    /// 传更大的值会被方法参数校验直接拒掉（AbpValidationException）——
-    /// 因此导出不能"一次要 5000 条"，只能分页累积。
-    /// </summary>
-    private const int ExportPageSize = 1000;
-
     private const string ImportPermission = MetadataPermissions.Stu.Student.Import;
-    private const string ExportPermission = MetadataPermissions.Stu.Student.Export;
 
     private readonly IStudentAppService _students;
     private readonly IXjglRepository<SysOrg> _orgs;
@@ -276,84 +263,19 @@ public class StudentImportExportAppService : XjglAppService, IStudentImportExpor
 
     // ------------------------------------------------------------------
     // 导出
+    //
+    // 原来这里是 GetExportAsync：带查询串同步返回 CSV，上限硬编码 5000 行
+    // 且**超限静默截断**（技术债 24 —— 用户拿到少了 8000 人的名单而毫无察觉）。
+    //
+    // 现在整段搬到了 Xjgl.Exporting.IStudentCsvExportBuilder：
+    //   - 查询逻辑一行未改（仍是复用 _students.GetListAsync，因此数据范围约束照旧生效）；
+    //   - 上限改为可配置 Xjgl:Export:MaxRows，且无论是否截断都把 Total 与实际行数交出去，
+    //     由 ExportTaskWorker 写进任务的 Message 让用户看见；
+    //   - 执行移到后台任务里，请求线程不再被几千行 CSV 拖住。
+    //
+    // 这条同步 HTTP 出口**必须消失**：留着它，新旧两条路就会并存，
+    // 而前端已经切到任务式，等于留了一个没人维护、没人发现坏了的入口。
     // ------------------------------------------------------------------
-
-    /// <summary>
-    /// 导出 CSV。
-    ///
-    /// **方法名必须以 <c>Get</c> 开头，这不是风格问题**：ABP 的自动 API 约定按方法名前缀
-    /// 决定 HTTP 动词（<c>Get*</c> → GET，<c>Create*</c> → POST，其余**默认 POST**），
-    /// 路由则剥掉动词前缀后按 kebab-case 取。
-    /// 之前的 <c>ExportAsync</c> 被注册成了 POST，而前端是带查询串下载（GET）——
-    /// 线上表现为 405 Method Not Allowed。
-    ///
-    /// 这个坑进程内单元测试**发现不了**（直接调方法，不经过路由），
-    /// 只有真的发一次 HTTP 请求才会暴露；所以本仓库的验收里保留了一步真实的 HTTP 探针。
-    /// </summary>
-    [Authorize(ExportPermission)]
-    public async Task<string> GetExportAsync(StudentQueryDto input)
-    {
-        StudentQueryDto BuildQuery(int skipCount) => new()
-        {
-            SchoolOrgId = input.SchoolOrgId,
-            IncludeDescendantOrgs = input.IncludeDescendantOrgs,
-            AcademicYear = input.AcademicYear,
-            GradeId = input.GradeId,
-            ClassId = input.ClassId,
-            StudentStatusCode = input.StudentStatusCode,
-            GenderCode = input.GenderCode,
-            Keyword = input.Keyword,
-            Sorting = input.Sorting ?? "StudentNo ASC",
-            SkipCount = skipCount,
-            MaxResultCount = ExportPageSize
-        };
-
-        // 复用列表查询：它已经带了数据范围约束与码值翻译，
-        // 导出不能另起一套查询 —— 否则很容易出现"界面看不到、导出却能拿到"
-        var students = new List<StudentListItemDto>();
-        var total = 0L;
-
-        for (var skip = 0; skip < ExportRowLimit; skip += ExportPageSize)
-        {
-            var page = await _students.GetListAsync(BuildQuery(skip));
-
-            total = page.TotalCount;
-            students.AddRange(page.Items);
-
-            // 取完了，或者已经到导出行数上限
-            if (page.Items.Count < ExportPageSize || students.Count >= total)
-            {
-                break;
-            }
-        }
-
-        var rows = new List<IEnumerable<string?>>
-        {
-            new[]
-            {
-                "学籍辅号", "姓名", "性别", "出生日期", "身份证号", "学校",
-                "学年", "年级", "班级", "学籍状态", "是否有照片", "含生僻字"
-            }
-        };
-
-        rows.AddRange(students.Select(s => new[]
-        {
-            s.StudentNo,
-            s.Name,
-            s.GenderName ?? s.GenderCode,
-            s.BirthDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            s.MaskedIdCard,
-            s.SchoolName,
-            s.AcademicYear,
-            s.GradeName,
-            s.ClassName,
-            s.StudentStatusName ?? s.StudentStatusCode,
-            s.HasPhoto ? "是" : "否",
-            s.HasRareCharacter ? "是" : "否"
-        }));
-
-        return Csv.WriteForExcel(rows);
-    }
 
     // ------------------------------------------------------------------
     // 辅助

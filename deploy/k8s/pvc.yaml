@@ -1,0 +1,154 @@
+# 河南省学籍管理系统 —— 需要持久化的目录（PersistentVolumeClaim）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 这三个 PVC 与 `deploy/docker-compose.prod.yml` 的命名卷一一对应，
+# 但 K8s 比 compose 多一个必须想清楚的问题：**多个副本能不能同时挂同一个卷**。
+#
+#   命名卷（compose）                K8s 的对应物
+#   xjgl-photofallback      →        xjgl-photo-fallback   （降级照片暂存区）
+#   App_Data/exports（宿主机目录） →  xjgl-exports          （导出/打印产物）
+#   （compose 没有）        →        xjgl-dataprotection-keys（数据保护密钥环）
+#
+# 【访问模式是这里最容易踩的坑】
+#   - `ReadWriteOnce`（RWO）的语义是"**单个节点**可读写"，
+#     **不是**"单个 Pod"。所以**单节点** k3s 上两个副本挂同一个 RWO PVC 是成立的
+#     —— 这也是本清单默认 replicas=2 还能跑起来的前提；
+#   - 一旦扩容到**多节点**，RWO 就只挂得到那个节点上的 Pod：没有卷的那个节点上
+#     副本会一直 Pending，表现为"扩容后新副本起不来"，而不是报卷的错误。
+#     多节点必须用支持 `ReadWriteMany` 的存储类（NFS/CephFS 等），
+#     或者改用对象存储（见 deploy/README.md 第 11.2 节对 `IExportArtifactStore` 的说明）。
+#
+# 【storageClassName 必须替换】
+#   下面是 k3s 自带的 `local-path`。其它集群请换成现场实际存在的存储类
+#   （`kubectl get storageclass`）。k3s 的 local-path **只有 RWO**，
+#   所以"多节点 + 共享"这条路在 k3s 默认存储上是不通的。
+#
+# 【容量都是拍出来的】
+#   没压测过，`deploy/README.md` 第 12 章说得很清楚：导出产物的磁盘占用要看
+#   保留期清理任务跑得对不对。导出产物的保留期默认 7 天（Xjgl:ExportTask:RetentionDays），
+#   按"最大导出量 × 7 天"估，别按最小可用值给。
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 导出/打印产物：挂到 /app/api/App_Data/exports
+#
+# ⚠ 这是本系统上 K8s **最现实的一个坑**（deploy/README.md 第 11.2 节）：
+#   当前实现把产物写在容器本地磁盘，任务的**相对路径**存在任务行里 ——
+#   多副本下"任务在 A 生成、下载请求打到 B"就是 404。
+#   单节点 k3s 上共享一个 RWO PVC 就能绕过它（所有副本在同一节点、看到同一份文件）；
+#   多节点则**必须** RWX 共享卷，或把 IExportArtifactStore 换成对象存储实现。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xjgl-exports
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+# ---------------------------------------------------------------------------
+# 降级照片暂存区：挂到 /data/photo-fallback
+#
+# 【这里有一个与直觉相反的设计约束】
+#   deploy/README.md 第 11.2 节写的是"降级区**每副本各自一份**，设计如此"：
+#   NAS 熔断时照片先落本机，补偿任务把**各自的那份**回放回 NAS。
+#   而 compose 用的是**命名卷**（单容器，等价于"就一份"）。
+#   本清单按 compose 的做法给一个共享 PVC —— 单节点 + 2 副本时，
+#   两个副本会一起扫同一批 FallbackPending 记录、一起读同一个文件、
+#   一起删（日志里会出现「降级副本缺失」这类告警），
+#   也就是说：**共享降级区是行为变更，不是"等价迁移"**。
+#   多节点部署更合理的选择是让每个副本用自己的本地盘
+#   （emptyDir 会随 Pod 重建丢失 → 丢的是"待补偿的照片"，不可接受；
+#    正确做法是每副本一个 PVC / StatefulSet 的 volumeClaimTemplate）。
+#   本次冒烟按单节点共享处理，并把这一条记进 README 的验收清单，
+#   避免以后有人以为"降级区本来就是全局共享的"。
+#
+# 容量按"NAS 熔断期间可能暂存的原图"估：这里是**原始照片**，不是缩略图。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xjgl-photo-fallback
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+# ---------------------------------------------------------------------------
+# 数据保护密钥环（DataProtection）：挂到 /app/api/App_Data/DataProtection-Keys
+#
+# ⚠ **多副本的硬约束**（deploy/README.md 第 11.2 节）：密钥环不共享时的表现是
+#   「在 A 副本登录、请求落到 B 副本就 401」—— 而这种失败最容易被误诊成
+#   "要开粘性会话"，然后 `sessionAffinity: ClientIP` 一开，问题被掩盖，
+#   真正的配置错误留在那里。**不要**用粘性会话去"修"它。
+#
+# 密钥环由 ASP.NET Core 写入文件（见 XjglHttpApiHostModule.ConfigureDataProtection
+# 把默认的 %LOCALAPPDATA% 改成了内容根下的 App_Data/DataProtection-Keys），
+# 因此共享它只需要"同一个目录"。但要注意两点：
+#   1. 单节点 + RWO 可以；多节点必须 RWX，或改成
+#      `PersistKeysToStackExchangeRedis`（代码里留了这条路，当前**未启用**）；
+#   2. 密钥环里的密钥是**敏感材料**：能读这个卷的人可以伪造令牌。
+#      别把它和导出产物放在同一个"谁都挂得上的"卷里。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xjgl-dataprotection-keys
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+# ---------------------------------------------------------------------------
+# 照片主存储的**冒烟替身**：挂到 /mnt/nas/xjgl
+#
+# 生产上 Xjgl__Photo__NasRoot 必须是**节点上挂好的 NAS**（SMB/NFS），
+# api-deployment.yaml 默认用 hostPath `/mnt/nas/xjgl`（`type: Directory`，
+# 路径不存在时 Pod 直接起不来 —— 这是刻意的：宁可"起不来"，也不要
+# 悄悄把照片写进一个空目录，那正是本仓库一直在防的静默降级）。
+#
+# 但如果只是想在一台干净的 k3s 上跑通冒烟、手头没有 NAS，
+# 就把 api-deployment.yaml 里 `nas` 这个卷从 hostPath 换成对本 PVC 的引用
+# （README「单节点 k3s 冒烟」一节给了确切的两行改法）。
+# 那时照片落在集群盘上，语义与生产**不同**，仅用于冒烟。
+# 不用这种跑法的话，这个 PVC 可以连同 api-deployment 里的引用一起删掉。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xjgl-photo-nas
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi

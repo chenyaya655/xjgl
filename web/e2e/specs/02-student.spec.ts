@@ -38,10 +38,14 @@ test.describe('学生档案流程', () => {
     await page.getByPlaceholder('姓名 / 学籍辅号').fill(student.studentNo)
     await page.getByRole('button', { name: '查询' }).click()
 
-    const row = page.locator('.el-table__row', { hasText: student.name })
+    // ⚠ 必须 `.first()`：姓名不是唯一键（测试库是长期累积的，同名学生可能不止一个）。
+    // 不加的话 Playwright 的 strict mode 会在命中多行时直接报
+    // "resolved to 2 elements" —— 而那条消息看起来像"选择器写错了"，
+    // 真实原因却是"测试数据重复"。定位靠**学籍辅号**（它才唯一）。
+    const row = page.locator('.el-table__row', { hasText: student.studentNo }).first()
 
     await expect(row).toBeVisible()
-    await expect(row).toContainText(student.studentNo)
+    await expect(row).toContainText(student.name)
 
     // 身份证必须是掩码形态（明文出现在列表里就是泄露）
     await expect(row).toContainText(/\d{6}\*{8}\d{4}/)
@@ -52,7 +56,7 @@ test.describe('学生档案流程', () => {
     await page.getByPlaceholder('姓名 / 学籍辅号').fill(student.studentNo)
     await page.getByRole('button', { name: '查询' }).click()
 
-    const row = page.locator('.el-table__row', { hasText: student.name })
+    const row = page.locator('.el-table__row', { hasText: student.studentNo }).first()
 
     await row.getByRole('button', { name: '详情' }).click()
 
@@ -89,7 +93,8 @@ test.describe('学生档案流程', () => {
     await page.getByRole('button', { name: '查询' }).click()
 
     await page
-      .locator('.el-table__row', { hasText: student.name })
+      .locator('.el-table__row', { hasText: student.studentNo })
+      .first()
       .getByRole('button', { name: '详情' })
       .click()
 

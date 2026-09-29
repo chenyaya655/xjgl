@@ -32,14 +32,38 @@ public static class MetadataPermissions
             public const string Assign = "Sys.Permission.Assign";
         }
 
+        /// <summary>
+        /// 角色管理。
+        ///
+        /// ⚠ 这里存在**两个权限层次**，是本系统唯一一处「菜单权限」与「接口权限」分离的地方：
+        ///   - 菜单能否看见 → 本组业务权限 <c>Sys.Role.*</c>（元数据定义，可正常授权与显示）；
+        ///   - 接口能否调用 → ABP 内置 <c>AbpIdentity.Roles*</c>（框架控制器自带的 <c>[Authorize]</c>）。
+        ///
+        /// 原因见 <c>ModuleMetadataDataSeedContributor</c> 里 Role 模块的注释：
+        /// 菜单过滤只认元数据快照里的权限名，而 <c>AbpIdentity.*</c> 不在快照里。
+        /// 因此**授权时必须两个都给**，只给本组会出现"菜单看得见、点进去 302"。
+        /// </summary>
+        public static class Role
+        {
+            public const string Query = "Sys.Role.Query";
+            public const string Create = "Sys.Role.Create";
+            public const string Update = "Sys.Role.Update";
+            public const string Delete = "Sys.Role.Delete";
+        }
+
         public static class User
         {
             public const string Query = "Sys.User.Query";
             public const string Create = "Sys.User.Create";
             public const string Update = "Sys.User.Update";
             public const string Delete = "Sys.User.Delete";
-            public const string Import = "Sys.User.Import";
-            public const string Export = "Sys.User.Export";
+
+            // 【这里曾经有 Import / Export 两条权限码，已删除】
+            // 它们被种进元数据、也授给了 admin，但**前后端都没有任何实现**：
+            // 没有接口、没有按钮。后果是权限管理页出现"勾了却不影响任何行为"的权限项 ——
+            // 管理员据此以为可以导入/导出用户，实际点了什么都不会发生。
+            // 本项目的约定是"不做文档/界面上看起来有、实际没做的功能"，
+            // 因此先**撤掉声明**，等功能真的做了再加回来（见 ROADMAP「用户导入导出」）。
         }
 
         public static class UserProvision
@@ -57,6 +81,9 @@ public static class MetadataPermissions
             public const string Create = "Sys.Code.Create";
             public const string Update = "Sys.Code.Update";
             public const string Delete = "Sys.Code.Delete";
+
+            // 微代码导入导出（ROADMAP 第 17 条）：与 Sys.Org.Import/Export 同一批，
+            // 也是"实现了才声明"（`CodeImportExportAppService` + `ExportTaskKinds.CodeCsv`）。
             public const string Import = "Sys.Code.Import";
             public const string Export = "Sys.Code.Export";
         }
@@ -67,6 +94,15 @@ public static class MetadataPermissions
             public const string Create = "Sys.Org.Create";
             public const string Update = "Sys.Org.Update";
             public const string Delete = "Sys.Org.Delete";
+
+            // 组织（学校名录）的导入导出（ROADMAP 第 17 条）。
+            //
+            // 【为什么它们曾经被删掉又加回来】
+            // 上一轮把 Import / Export 从元数据里撤掉了，因为当时**没有任何实现** ——
+            // 而"勾了不影响任何行为"的权限项比没有这个权限更坏。
+            // 本轮真的做出了导入（`OrganizationImportExportAppService`）与
+            // 导出（`ExportTaskKinds.OrganizationCsv`），所以声明与实现重新对齐。
+            // 用户 / 微代码 / 异动的导入导出仍未实现，因此**仍然没有**对应的权限码。
             public const string Import = "Sys.Org.Import";
             public const string Export = "Sys.Org.Export";
         }
@@ -104,6 +140,8 @@ public static class MetadataPermissions
             public const string Create = "Chg.Apply.Create";
             public const string Update = "Chg.Apply.Update";
             public const string Delete = "Chg.Apply.Delete";
+
+            // 申请单导出（ROADMAP 第 17 条）：实现了才声明。
             public const string Export = "Chg.Apply.Export";
         }
 
@@ -112,6 +150,9 @@ public static class MetadataPermissions
             public const string Query = "Chg.Audit.Query";
             public const string Approve = "Chg.Audit.Approve";
             public const string RevokeApprove = "Chg.Audit.RevokeApprove";
+
+            // 审核**流水**导出（一个审批节点一行）：与申请单导出是两份不同的产物，
+            // 权限也分开 —— "能看申请单"不等于"能拉走审核台账"。
             public const string Export = "Chg.Audit.Export";
         }
     }
@@ -128,6 +169,28 @@ public static class MetadataPermissions
 
             /// <summary>触发「降级照片回放 NAS」的补偿操作，属于运维动作，通常只授给管理员。</summary>
             public const string Compensate = "Pho.Photo.Compensate";
+        }
+    }
+
+    /// <summary>统计报表子系统。</summary>
+    public static class Rpt
+    {
+        /// <summary>
+        /// 学生统计（按学校 / 年级 / 班级 / 学籍状态 / 性别 / 学年 / 有无照片）。
+        ///
+        /// 刻意**不复用** <c>Stu.Student.Query</c>：能看名单不等于能看汇总 ——
+        /// 汇总数字本身就是敏感信息（一个县的学生总数、异动趋势）。
+        /// 但两者共用同一套数据范围，所以"能看多少"不会被统计接口放大。
+        /// </summary>
+        public static class Student
+        {
+            public const string Query = "Rpt.Student.Query";
+        }
+
+        /// <summary>异动统计（按异动类型 / 审批状态 / 月份 / 转出校 / 转入校）。</summary>
+        public static class Change
+        {
+            public const string Query = "Rpt.Change.Query";
         }
     }
 }

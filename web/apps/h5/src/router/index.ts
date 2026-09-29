@@ -14,6 +14,8 @@ import { useAuthStore } from '@/stores/auth'
  *   代价是 URL 里多个 `#`，对内部办公系统来说可以接受。
  *
  * 路由表是**固定三个页签**，不做元数据驱动的动态路由（原因见 stores/auth.ts）。
+ * 页签下可以有子页面（如 `photo/missing`），但子页面**不新增页签** ——
+ * 移动端的功能入口一旦变多，教师就得靠翻菜单找活儿干。
  */
 const routes: RouteRecordRaw[] = [
   {
@@ -37,13 +39,43 @@ const routes: RouteRecordRaw[] = [
         path: 'photo',
         name: 'photo',
         component: () => import('@/views/photo/index.vue'),
-        meta: { title: '拍照上传' }
+        meta: { title: '拍照上传', tab: 'photo' }
+      },
+      {
+        // 缺照片名单：从「拍照上传」页签进入的子页面。
+        //
+        // 【为什么它不是第四个页签】见 views/photo/index.vue 顶部注释。简单说：
+        // 它是"把照片补齐"这一个任务的队列，不是一级功能区；四个页签在 320px
+        // 宽下会把标签挤成两行。做成子页面还额外买到两件事：名单与拍摄各占一整屏，
+        // 以及"返回"有明确落点。
+        //
+        // meta.tab 是给底部页签用的：子页面的路由名不叫 photo，若页签直接读
+        // route.name，进入子页面时三个页签会**全部不高亮**，老师会以为点丢了。
+        path: 'photo/missing',
+        name: 'photo-missing',
+        component: () => import('@/views/photo/missing.vue'),
+        meta: { title: '缺照片名单', tab: 'photo' }
       },
       {
         path: 'mine',
         name: 'mine',
         component: () => import('@/views/mine/index.vue'),
         meta: { title: '我的' }
+      },
+      {
+        // 发起异动申请：从「我的」页的「业务入口」进入的子页面。
+        //
+        // 【为什么入口在「我的」而不是「待办」】「待办」的语义是"轮到我审的任务"，
+        // 把"发起申请"混进去，教师看一条记录就得先判断"这是让我审的还是我提的" ——
+        // 语义混用最典型的代价就是判断错方向。而「我的」是每个人都有的功能入口页，
+        // 放在那里既不依赖审核角色，也不会串语义（详见 views/change/apply.vue 顶部注释）。
+        //
+        // meta.tab 照 photo/missing 的做法：子页面的路由名不等于页签名，页签若直接读
+        // route.name，进来时三个页签会**全部不高亮**，老师会以为点丢了。页签**仍然是 3 个**。
+        path: 'change/apply',
+        name: 'change-apply',
+        component: () => import('@/views/change/apply.vue'),
+        meta: { title: '发起异动申请', tab: 'mine' }
       }
     ]
   },

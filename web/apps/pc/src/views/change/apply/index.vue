@@ -1,17 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { changeFlowApi, changeTypeApi, orgApi, studentApi } from '@/api'
+import {
+  changeFlowApi,
+  changeTypeApi,
+  describeTruncation,
+  exportTaskApi,
+  orgApi,
+  saveBlob,
+  studentApi
+} from '@/api'
 import type {
   ChangeApplyListItem,
   ChangeType,
+  ExportTask,
   OrgDto,
   StudentListItem
 } from '@/api/types'
+import { ChangeApplyStatuses, ExportTaskKinds } from '@/api/types'
 import ChangeApplyDetail from '@/components/ChangeApplyDetail.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import SchoolSelect from '@/components/SchoolSelect.vue'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -30,6 +41,7 @@ const auth = useAuthStore()
 
 const canCreate = computed(() => auth.can(MetadataPermissions.Chg.Apply.Create))
 const canDelete = computed(() => auth.can(MetadataPermissions.Chg.Apply.Delete))
+const canExport = computed(() => auth.can(MetadataPermissions.Chg.Apply.Export))
 
 const loading = ref(false)
 const rows = ref<ChangeApplyListItem[]>([])
@@ -46,13 +58,14 @@ const query = reactive({
 
 const page = ref(1)
 
-const statusOptions = [
-  { value: 'Submitted', label: '待审核' },
-  { value: 'InProgress', label: '审核中' },
-  { value: 'Approved', label: '已通过' },
-  { value: 'Rejected', label: '已驳回' },
-  { value: 'Withdrawn', label: '已撤回' }
-]
+/**
+ * 申请状态下拉项**来自码表**（CHANGE_APPLY_STATUS），不在前端硬编码。
+ *
+ * 原来手写了 5 条，漏掉「草稿」「已归档」；更麻烦的是**状态码值本身**
+ * 一旦后端调整（例如把 Withdrawn 改名），手写清单不会报错，
+ * 只会让那个筛选项**静默查不到任何数据**。走码表就不会有这个问题（债 12）。
+ */
+const statusCodes = useCodeOptions(CodeCategories.ChangeApplyStatus)
 
 async function load(): Promise<void> {
   loading.value = true
@@ -81,12 +94,12 @@ function search(): void {
 
 function statusTagType(status: string): 'success' | 'danger' | 'warning' | 'info' {
   switch (status) {
-    case 'Approved':
+    case ChangeApplyStatuses.Approved:
       return 'success'
-    case 'Rejected':
+    case ChangeApplyStatuses.Rejected:
       return 'danger'
-    case 'Submitted':
-    case 'InProgress':
+    case ChangeApplyStatuses.Submitted:
+    case ChangeApplyStatuses.InProgress:
       return 'warning'
     default:
       return 'info'
@@ -233,18 +246,96 @@ async function remove(row: ChangeApplyListItem): Promise<void> {
   await load()
 }
 
-onMounted(async () => {
-  try {
-    types.value = await changeTypeApi.getTypes(false)
-  } catch {
-    types.value = []
-  }
+// ---------------------------------------------------------------------------
+// 导出
+// ---------------------------------------------------------------------------
+
+/**
+ * 导出**申请单清单**（一个人一行），不是审核流水。
+ *
+ * 审核流水（含处理人 / 处理时间 / 审核意见）是另一份产物、另一个权限，
+ * 入口在审核页 —— 见 `ExportTaskKinds` 的说明。这两份不能合并：
+ * 一份申请在流水里是多行，合并后"共几条"就对不上了。
+ */
+const exporting = ref(false)
+const progressText = ref('')
+
+/**
+ * 页面卸载后停止轮询。
+ *
+ * 少了这个，用户点了导出再立刻切走，定时器仍会每 1.5 秒打一次接口 ——
+ * 直到 5 分钟超时为止，而那时他早就不在这个页面了。
+ */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+})
+
+async function exportApplies(): Promise<void> {
+  exporting.value = true
+  progressText.value = '排队中…'
 
   try {
-    schools.value = flattenSchools(await orgApi.getTree())
-  } catch {
-    schools.value = []
+    const task = await exportTaskApi.run(
+      {
+        kind: ExportTaskKinds.ChangeApplyCsv,
+        // 沿用当前筛选条件（看到什么就导出什么）。刻意**不带分页参数**：
+        // 条件会被原样快照进任务，分页累积由后端按 Xjgl:Export:MaxRows 收口。
+        changeQuery: {
+          changeTypeId: query.changeTypeId,
+          status: query.status,
+          keyword: query.keyword || undefined,
+          sorting: 'ApplyDate DESC'
+        }
+      },
+      {
+        shouldStop: () => disposed,
+        onProgress: (t: ExportTask) => {
+          progressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+        }
+      }
+    )
+
+    const blob = await exportTaskApi.download(task.id)
+
+    // 文件名以**后端给的**为准（带了日期等有用信息），后端没给才用兜底名
+    saveBlob(blob, task.fileName || `异动申请_${new Date().toISOString().slice(0, 10)}.csv`)
+
+    // 截断必须显式提示：申请单没有天然上限，后端按 MaxRows 截，
+    // 少了几条却只弹"成功"，用户会照着这份清单去核对"还有谁没走流程"。
+    const truncation = describeTruncation(task)
+
+    if (truncation) {
+      ElMessage.warning(truncation)
+    } else {
+      ElMessage.success(
+        task.message ? `${task.kindName}已完成：${task.message}` : `${task.kindName}已完成`
+      )
+    }
+  } catch (e) {
+    // 与微代码导出同一处理：HTTP 失败已被拦截器弹过（且带后端 reason），
+    // 只有 `exportTaskApi.run` 抛的业务错误（任务 Failed / 被取消 / 等超时）
+    // 不经过拦截器 —— 那种情况不提示就等于"点了导出、转圈停下、什么都没发生"。
+    if (!(e as { isAxiosError?: boolean })?.isAxiosError) {
+      ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
+    }
+  } finally {
+    // 无论成功、失败还是超时都要清掉，否则那行提示会一直留在页面上
+    exporting.value = false
+    progressText.value = ''
   }
+}
+
+onMounted(async () => {
+  // 三件事互不依赖，并行拉取（码表 / 异动类型 / 组织树）
+  const [, typeList, tree] = await Promise.all([
+    statusCodes.load(),
+    changeTypeApi.getTypes(false).catch(() => [] as ChangeType[]),
+    orgApi.getTree().catch(() => [] as OrgDto[])
+  ])
+
+  types.value = typeList
+  schools.value = flattenSchools(tree)
 
   await load()
 })
@@ -267,7 +358,12 @@ onMounted(async () => {
 
         <el-form-item label="状态">
           <el-select v-model="query.status" placeholder="全部" clearable style="width: 130px">
-            <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
+            <el-option
+              v-for="s in statusCodes.options.value"
+              :key="s.value"
+              :label="s.label"
+              :value="s.value"
+            />
           </el-select>
         </el-form-item>
 
@@ -294,10 +390,20 @@ onMounted(async () => {
       <template #header>
         <div class="chg-apply__header">
           <span>异动申请（共 {{ total }} 条）</span>
-          <el-button v-if="canCreate" type="primary" @click="openSubmit">
-            <AppIcon name="Plus" />
-            <span>发起异动申请</span>
-          </el-button>
+          <div>
+            <el-button v-if="canExport" plain :loading="exporting" @click="exportApplies">
+              <AppIcon name="Download" />
+              <span>导出</span>
+            </el-button>
+            <el-button v-if="canCreate" type="primary" @click="openSubmit">
+              <AppIcon name="Plus" />
+              <span>发起异动申请</span>
+            </el-button>
+
+            <!-- 导出改成任务式之后要等后台生成（可能几十秒），
+                 只说"转圈"用户不知道卡在哪一步，所以把真实状态写出来。 -->
+            <span v-if="progressText" class="chg-apply__muted">{{ progressText }}</span>
+          </div>
         </div>
       </template>
 
@@ -337,7 +443,10 @@ onMounted(async () => {
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
             <el-button
-              v-if="row.status === 'Submitted' || row.status === 'InProgress'"
+              v-if="
+                row.status === ChangeApplyStatuses.Submitted ||
+                row.status === ChangeApplyStatuses.InProgress
+              "
               link
               type="warning"
               @click="withdraw(row)"
@@ -345,7 +454,11 @@ onMounted(async () => {
               撤回
             </el-button>
             <el-button
-              v-if="canDelete && (row.status === 'Withdrawn' || row.status === 'Rejected')"
+              v-if="
+                canDelete &&
+                (row.status === ChangeApplyStatuses.Withdrawn ||
+                  row.status === ChangeApplyStatuses.Rejected)
+              "
               link
               type="danger"
               @click="remove(row)"

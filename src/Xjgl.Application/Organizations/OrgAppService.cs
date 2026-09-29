@@ -120,6 +120,11 @@ public class OrgAppService : XjglAppService, IOrgAppService
                      ?? throw new BusinessException(XjglDomainErrorCodes.OrgNotFound);
         }
 
+        // ★ 与移动共用同一条层级规则：指定了父节点就必须挂在对的那一级。
+        // 少了它，"把学校直接建在省厅下"会成功，而物化路径 / TreeLevel /
+        // 数据范围 / 审核级别截断都会跟着静默算错（见 EnsureHierarchy 的说明）。
+        EnsureHierarchy(input.OrgType, parent);
+
         var entity = new SysOrg(
             GuidGenerator.Create(),
             input.OrgType,
@@ -230,6 +235,14 @@ public class OrgAppService : XjglAppService, IOrgAppService
             return;
         }
 
+        // ★ 层级校验（放在自环/子孙检查**之后**：那两条的错误信息更具体，
+        //   例如"不能移动到自己的下级"比"层级不对"更能说明问题）。
+        //
+        // 少了这一步，"把学校挂到省厅下"这种跳级移动会**成功且不报错**：
+        // 物化路径、TreeLevel、数据范围、审核级别截断都会跟着算错。
+        // 前端虽然按层级灰掉了不合法的父节点，但接口是公开契约，不能只靠界面拦。
+        EnsureHierarchy(entity.OrgType, newParent);
+
         var oldPath = entity.PathCode;
         var oldLevel = entity.TreeLevel;
 
@@ -246,6 +259,48 @@ public class OrgAppService : XjglAppService, IOrgAppService
     // ------------------------------------------------------------------
     // 内部实现
     // ------------------------------------------------------------------
+
+    /// <summary>
+    /// 校验"这个类型的组织能不能挂在这个父节点下"（四级树：省 → 市 → 县 → 校）。
+    ///
+    /// 规则（新增与移动**共用同一条**，避免出现"新增允许、移动不允许"这种自相矛盾）：
+    ///   - **没有父节点**（作为根节点）：允许任意类型。
+    ///     界面上新增下级时会按层级自动推断类型，用户碰不到"省厅下面凭空建一所学校"；
+    ///     而导入/测试会直接造单点数据，把它当错误挡掉只会逼出一堆无意义的脚手架。
+    ///     真正要挡的是**层级挂错**，也就是下面那条。
+    ///   - **有父节点**：父节点的类型必须正好是 <see cref="OrgTypes.ExpectedParentOf"/> 要求的那一级。
+    ///     这条既挡住"把学校挂到省厅下"，也顺带挡住了"省厅挂在任何节点下"
+    ///     （省厅的期望上级是 null，与任何实际父节点都不匹配）。
+    ///
+    /// 【为什么必须挡】
+    /// 四级树被三处**按层级推导**的东西依赖：物化路径与 `TreeLevel`、数据范围、
+    /// 异动审核级别的截断。跳级挂靠不会立刻报错，只会让这三处静默算错。
+    /// </summary>
+    private static void EnsureHierarchy(string orgType, SysOrg? parent)
+    {
+        // 作为根节点：允许（见上面的说明）
+        if (parent == null)
+        {
+            return;
+        }
+
+        var expected = OrgTypes.ExpectedParentOf(orgType);
+
+        if (expected == null)
+        {
+            throw new BusinessException(XjglDomainErrorCodes.OrgHierarchyInvalid)
+                .WithData("reason",
+                    $"「{OrgTypes.GetDisplayName(orgType)}」只能作为根节点，不能挂在「{parent.Name}」下面");
+        }
+
+        if (!string.Equals(parent.OrgType, expected, StringComparison.Ordinal))
+        {
+            throw new BusinessException(XjglDomainErrorCodes.OrgHierarchyInvalid)
+                .WithData("reason",
+                    $"「{OrgTypes.GetDisplayName(orgType)}」只能挂在「{OrgTypes.GetDisplayName(expected)}」下面，" +
+                    $"而「{parent.Name}」是「{OrgTypes.GetDisplayName(parent.OrgType)}」");
+        }
+    }
 
     private async Task<List<SysOrg>> QueryNodesAsync(OrgQueryDto input)
     {

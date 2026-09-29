@@ -24,6 +24,98 @@ public static class OrgTypes
         School => "学校",
         _ => orgType
     };
+
+    /// <summary>
+    /// 该类型**必须**挂在哪一级下面；省厅没有上级，返回 <c>null</c>。
+    ///
+    /// 【为什么这是一条硬规则，而不是"建议"】
+    /// 四级树（省 → 市 → 县 → 校）不只是展示结构，它被三处**按层级推导**的东西依赖：
+    ///   - 物化路径 `PathCode` 的段数与 `TreeLevel`；
+    ///   - 数据范围（省厅=全省 / 市=本级及下级 / …）；
+    ///   - 异动审核级别的截断（`ApproveLevels` 与组织层级对应）。
+    /// 允许"跳级挂靠"（例如把学校直接挂在省厅下）不会立刻报错，
+    /// 但会让上面三处**静默算错** —— 所以移动时必须校验。
+    /// </summary>
+    public static string? ExpectedParentOf(string orgType) => orgType switch
+    {
+        City => Province,
+        County => City,
+        School => County,
+        // 省厅（以及未知类型）：没有期望的上级；未知类型在别处单独校验
+        _ => null
+    };
+
+    /// <summary>
+    /// 把用户写在 CSV 里的组织类型解析成码值。
+    ///
+    /// 【为什么要接受这么多写法】
+    /// 导入模板是给**业务人员**填的，而"省厅 / 省 / Province / 省级教育行政部门"
+    /// 在他们眼里是同一个东西。只认一种写法的话，最常见的失败是
+    /// "导入 800 行、899 行报『未知的组织类型』" —— 而原因只是他写的是"省"不是"省厅"。
+    /// 这类失败对使用者极不友好，且完全可以在解析层消化掉。
+    ///
+    /// 大小写与首尾空格不敏感（Excel 里很容易带上）。
+    /// </summary>
+    public static bool TryParse(string? text, out string orgType)
+    {
+        orgType = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var value = text.Trim();
+
+        switch (value.ToLowerInvariant())
+        {
+            case "province":
+            case "省级":
+                orgType = Province;
+                return true;
+
+            case "city":
+            case "市级":
+                orgType = City;
+                return true;
+
+            case "county":
+            case "县级":
+                orgType = County;
+                return true;
+
+            case "school":
+                orgType = School;
+                return true;
+        }
+
+        // 中文别名（含 GetDisplayName 的完整叫法）
+        if (value is "省厅" or "省" or "省教育厅" or "省级教育行政部门")
+        {
+            orgType = Province;
+            return true;
+        }
+
+        if (value is "地市" or "市" or "市局" or "市教育局" or "市级教育行政部门" or "市教体局")
+        {
+            orgType = City;
+            return true;
+        }
+
+        if (value is "县区" or "县" or "区" or "县局" or "县教育局" or "县级教育行政部门" or "县教体局")
+        {
+            orgType = County;
+            return true;
+        }
+
+        if (value is "学校" or "校" or "中小学")
+        {
+            orgType = School;
+            return true;
+        }
+
+        return false;
+    }
 }
 
 /// <summary>

@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { codeApi, studentChangeLogApi, studentPrintApi, studentProfileApi } from '@xjgl/api'
+import { exportTaskApi, studentChangeLogApi, studentProfileApi, saveBlob } from '@xjgl/api'
 import type {
-  CodeItemLookup,
   Guardian,
   GuardianInput,
   Physical,
@@ -20,6 +19,7 @@ import type {
   Subsidy,
   SubsidyInput
 } from '@xjgl/api'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 
@@ -74,20 +74,26 @@ async function printCard(): Promise<void> {
   printing.value = true
 
   try {
-    const blob = await studentPrintApi.studentCard(studentId.value)
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
+    // 打印改成任务式（服务端渲染 PDF 是 CPU 活）。这里要等它跑完再下载，
+    // 因此关闭抽屉不会取消任务 —— 但卸载后应当停止轮询，见下面的 disposed。
+    const task = await exportTaskApi.run(
+      { kind: 'StudentCardPdf', studentId: studentId.value },
+      { shouldStop: () => disposed }
+    )
 
-    link.href = url
-    link.download = `学籍卡_${props.student.name}_${props.student.studentNo}.pdf`
-    link.click()
-    URL.revokeObjectURL(url)
-  } catch {
-    ElMessage.error('打印学籍卡失败，请稍后重试（若持续失败，请检查服务器字体配置）')
+    saveBlob(await exportTaskApi.download(task.id), task.fileName || `学籍卡_${props.student.name}_${props.student.studentNo}.pdf`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '打印学籍卡失败，请稍后重试')
   } finally {
     printing.value = false
   }
 }
+
+/** 抽屉关闭后停止轮询，否则关了抽屉还在每 1.5 秒打一次接口。 */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+})
 
 const studentId = computed(() => props.student?.id ?? '')
 
@@ -170,49 +176,40 @@ interface SelectOption {
   label: string
 }
 
-const relationOptions = ref<SelectOption[]>([])
-const rewardTypeOptions = ref<SelectOption[]>([])
-const rewardLevelOptions = ref<SelectOption[]>([])
-const punishTypeOptions = ref<SelectOption[]>([])
-const subsidyTypeOptions = ref<SelectOption[]>([])
-const healthOptions = ref<SelectOption[]>([])
+/**
+ * 六张子表的码值下拉全部走共享的 `useCodeOptions`（债 12）。
+ *
+ * 这里原来自己写了"一次 Promise.all + optionsLoaded 标志"的缓存。
+ * 换成组合式函数不是为了少写几行，而是为了拿到它已经处理好的三件事：
+ *   1) **并发去重**（两个组件同时打开时只发一次请求）；
+ *   2) **失败不缓存**（原来的 `optionsLoaded = true` 是在 catch 之后也执行的，
+ *      一次网络抖动会让这六个下拉**整个会话都空着**）；
+ *   3) 统一的失败原因（`error`），界面上可以提示"码表没载入"。
+ */
+const relationCodes = useCodeOptions(CodeCategories.GuardianRelation)
+const rewardTypeCodes = useCodeOptions(CodeCategories.RewardType)
+const rewardLevelCodes = useCodeOptions(CodeCategories.RewardLevel)
+const punishTypeCodes = useCodeOptions(CodeCategories.PunishType)
+const subsidyTypeCodes = useCodeOptions(CodeCategories.SubsidyType)
+const healthCodes = useCodeOptions(CodeCategories.Health)
 
-function toOptions(items: CodeItemLookup[]): SelectOption[] {
-  return items.map((i) => ({ value: i.code, label: i.name }))
-}
-
-let optionsLoaded = false
+const relationOptions = relationCodes.options
+const rewardTypeOptions = rewardTypeCodes.options
+const rewardLevelOptions = rewardLevelCodes.options
+const punishTypeOptions = punishTypeCodes.options
+const subsidyTypeOptions = subsidyTypeCodes.options
+const healthOptions = healthCodes.options
 
 async function loadOptions(): Promise<void> {
-  if (optionsLoaded) {
-    return
-  }
-
-  const safe = async (categoryCode: string): Promise<CodeItemLookup[]> => {
-    try {
-      return await codeApi.getItemsByCode(categoryCode)
-    } catch {
-      // 码表缺失不应让详情打不开：下拉框为空，但其它字段照常可编辑
-      return []
-    }
-  }
-
-  const [relations, rewardTypes, rewardLevels, punishTypes, subsidyTypes, health] = await Promise.all([
-    safe('GUARDIAN_RELATION'),
-    safe('REWARD_TYPE'),
-    safe('REWARD_LEVEL'),
-    safe('PUNISH_TYPE'),
-    safe('SUBSIDY_TYPE'),
-    safe('HEALTH')
+  // 并行拉取；失败由各自的 error 承载，不抛（码表缺失不应让详情打不开）
+  await Promise.all([
+    relationCodes.load(),
+    rewardTypeCodes.load(),
+    rewardLevelCodes.load(),
+    punishTypeCodes.load(),
+    subsidyTypeCodes.load(),
+    healthCodes.load()
   ])
-
-  relationOptions.value = toOptions(relations)
-  rewardTypeOptions.value = toOptions(rewardTypes)
-  rewardLevelOptions.value = toOptions(rewardLevels)
-  punishTypeOptions.value = toOptions(punishTypes)
-  subsidyTypeOptions.value = toOptions(subsidyTypes)
-  healthOptions.value = toOptions(health)
-  optionsLoaded = true
 }
 
 // ---------------------------------------------------------------------------

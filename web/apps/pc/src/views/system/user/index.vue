@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { identityApi } from '@/api'
+import { describeError, identityApi, isJsonParseError } from '@/api'
 import type { IdentityRole, IdentityUser } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { MetadataPermissions } from '@/constants/permissions'
@@ -33,6 +33,18 @@ const rows = ref<IdentityUser[]>([])
 const total = ref(0)
 const roles = ref<IdentityRole[]>([])
 
+/**
+ * 加载失败的原因（非空时页面上显示明确提示）。
+ *
+ * 【为什么不像原来那样只 `catch {}`】
+ *   没有 `AbpIdentity.Users` 时 `/api/identity/users` 返回的是 **302 跳登录页**
+ *   （不是 403），axios 拿到登录页 HTML、解 JSON 抛错。原来的写法让这个错误
+ *   既没有提示、列表也是空的 —— 使用者只会判断成"这个页面坏了/没有数据"。
+ *   角色下拉同理（`AbpIdentity.Roles`），见 loadRoles 的注释。
+ */
+const loadFailed = ref('')
+const rolesFailed = ref('')
+
 const query = reactive({
   filter: '',
   maxResultCount: 20
@@ -42,6 +54,7 @@ const page = ref(1)
 
 async function load(): Promise<void> {
   loading.value = true
+  loadFailed.value = ''
 
   try {
     const result = await identityApi.getUsers({
@@ -53,8 +66,28 @@ async function load(): Promise<void> {
 
     rows.value = result.items
     total.value = result.totalCount
+  } catch (error) {
+    rows.value = []
+    total.value = 0
+    loadFailed.value = isJsonParseError(error)
+      ? '读取用户列表失败：接口未授权时被重定向到登录页（返回的不是 JSON）。' +
+        '请确认当前账号拥有框架权限 AbpIdentity.Users。'
+      : `读取用户列表失败：${describeError(error)}`
   } finally {
     loading.value = false
+  }
+}
+
+/** 角色下拉：失败要说出来，否则编辑弹窗里的"角色"是一个空下拉、看不出原因。 */
+async function loadRoles(): Promise<void> {
+  try {
+    roles.value = await identityApi.getRoles()
+    rolesFailed.value = ''
+  } catch (error) {
+    roles.value = []
+    rolesFailed.value = isJsonParseError(error)
+      ? '读取角色列表失败：请确认当前账号拥有框架权限 AbpIdentity.Roles。'
+      : `读取角色列表失败：${describeError(error)}`
   }
 }
 
@@ -220,12 +253,7 @@ async function remove(row: IdentityUser): Promise<void> {
 }
 
 onMounted(async () => {
-  try {
-    roles.value = await identityApi.getRoles()
-  } catch {
-    roles.value = []
-  }
-
+  await loadRoles()
   await load()
 })
 </script>
@@ -265,6 +293,15 @@ onMounted(async () => {
           </el-button>
         </div>
       </template>
+
+      <el-alert
+        v-if="loadFailed"
+        type="error"
+        :closable="false"
+        show-icon
+        class="user__tip"
+        :title="loadFailed"
+      />
 
       <el-table v-loading="loading" :data="rows" border stripe height="calc(100vh - 300px)">
         <el-table-column prop="userName" label="用户名" width="180" />
@@ -359,7 +396,8 @@ onMounted(async () => {
           <el-select v-model="form.roleNames" multiple filterable style="width: 100%" placeholder="可多选">
             <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.name" />
           </el-select>
-          <div class="user__hint">
+          <div v-if="rolesFailed" class="user__error">{{ rolesFailed }}</div>
+          <div v-else class="user__hint">
             角色决定权限集合；具体的权限项在「权限管理」里按角色配置。
           </div>
         </el-form-item>
@@ -406,6 +444,12 @@ onMounted(async () => {
 
 .user__hint {
   color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.user__error {
+  color: var(--el-color-danger);
   font-size: 12px;
   line-height: 1.5;
 }

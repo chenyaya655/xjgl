@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { identityApi, permissionApi } from '@/api'
+import { describeError, identityApi, isJsonParseError, permissionApi } from '@/api'
 import type { IdentityRole, IdentityUser, PermissionGroup } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { MetadataPermissions } from '@/constants/permissions'
@@ -22,6 +23,7 @@ import { useAuthStore } from '@/stores/auth'
  *   2) **只提交变化项**：一次全量提交会把几百项都写一遍（还容易误改）。
  */
 const auth = useAuthStore()
+const route = useRoute()
 
 const canAssign = computed(() => auth.can(MetadataPermissions.Sys.Permission.Assign))
 
@@ -34,6 +36,18 @@ const loading = ref(false)
 const saving = ref(false)
 const groups = ref<PermissionGroup[]>([])
 const entityDisplayName = ref('')
+
+/**
+ * 角色下拉加载失败的原因（非空时显示明确提示，而不是静默留空）。
+ *
+ * 【为什么必须显式记录 —— 实测踩过】
+ *   保留权限的账号打 `/api/identity/roles/all` 返回的是 **302 跳登录页**（不是 403），
+ *   浏览器跟随重定向后 axios 拿到 HTML、解 JSON 抛错，而原来的写法是
+ *   `catch { roles.value = [] }`：下拉框空白、**一句提示都没有**。
+ *   表现是"这个页面没有选择角色的地方"，而不是"我没权限读角色" ——
+ *   这属于最难排查的一类问题，必须让失败可见。
+ */
+const rolesFailed = ref('')
 
 /** 权限名 → 是否授权（当前界面上的值）。 */
 const granted = reactive(new Map<string, boolean>())
@@ -189,14 +203,32 @@ async function save(): Promise<void> {
 onMounted(async () => {
   try {
     roles.value = await identityApi.getRoles()
-  } catch {
+    rolesFailed.value = ''
+  } catch (error) {
     roles.value = []
+    rolesFailed.value = isJsonParseError(error)
+      ? '读取角色列表失败：接口未授权时被重定向到登录页（返回的不是 JSON）。' +
+        '请确认当前账号拥有框架权限 AbpIdentity.Roles。'
+      : `读取角色列表失败：${describeError(error)}`
   }
 
-  if (roles.value.length > 0) {
+  /*
+   * 支持从「角色管理」页带参跳转过来：`/system/permission?role=Xxx`。
+   *
+   * 为什么要有这个入口：建完角色紧接着就要给它配权限，
+   * 如果只能自己在下拉框里再找一遍刚建的角色，体验上就是"两件事"，
+   * 而实际上它们是一件事的两步。找不到角色下拉时（上面的失败分支）
+   * 这里自然也不会命中，提示已经在上面显示了。
+   */
+  const requested = typeof route.query.role === 'string' ? route.query.role : ''
+
+  if (requested && roles.value.some((r) => r.name === requested)) {
+    providerKey.value = requested
+  } else if (roles.value.length > 0) {
     providerKey.value = roles.value[0].name
-    await loadPermissions()
   }
+
+  await loadPermissions()
 })
 
 async function searchUsers(text: string): Promise<void> {
@@ -269,6 +301,16 @@ async function searchUsers(text: string): Promise<void> {
           </el-button>
         </el-form-item>
       </el-form>
+
+      <!-- 读不到角色/用户时必须说出来：静默留空会让人以为"这里没有可选项" -->
+      <el-alert
+        v-if="rolesFailed"
+        type="error"
+        :closable="false"
+        show-icon
+        class="perm__alert"
+        :title="rolesFailed"
+      />
     </el-card>
 
     <el-card v-loading="loading" shadow="never">
@@ -350,6 +392,10 @@ async function searchUsers(text: string): Promise<void> {
 <style scoped>
 .perm__picker {
   margin-bottom: 16px;
+}
+
+.perm__alert {
+  margin-top: 12px;
 }
 
 .perm__picker :deep(.el-form-item) {

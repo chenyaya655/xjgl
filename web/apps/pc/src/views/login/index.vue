@@ -67,9 +67,29 @@ async function handleSubmit(): Promise<void> {
 
     ElMessage.success(`欢迎回来，${auth.profile.realName || auth.profile.userName}`)
 
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
 
-    await router.replace(redirect)
+    if (redirect) {
+      /**
+       * SSO 回跳：**必须用浏览器整页导航，不能交给 vue-router**。
+       *
+       * 【为什么】`redirect` 里装的往往是一个带查询串的**服务端地址**
+       * （典型是 OpenIddict 的授权端点：`/connect/authorize?client_id=…&redirect_uri=…`）。
+       * 如果交给 `router.replace(redirect)`，vue-router 会把这个字符串当**路由路径**解析：
+       *   - 问号后面的部分被当成它自己的 query 重新编码；
+       *   - 结果是 `%20` 变成 `%2520`、`%3A` 变成 `%253A`（双重编码）。
+       * 服务端拿到双重编码的参数就认不出来 —— 实测表现为**授权端点 400**，
+       * 而浏览器地址栏看起来"参数都在"，非常难查。
+       *
+       * 整页导航不会有这个问题：地址原样交给服务端，也正是 OAuth 授权码流程
+       * 要求的形态（授权端点由服务端渲染，本来就不该经过 SPA 路由）。
+       */
+      window.location.replace(redirect)
+
+      return
+    }
+
+    await router.replace('/dashboard')
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '登录失败，请稍后重试。'
     form.value.password = ''
@@ -146,6 +166,17 @@ async function handleSubmit(): Promise<void> {
           </el-button>
         </el-form>
 
+        <!--
+          账号激活是**公开页面**（`/activate`，meta.anonymous），但此前没有任何入口 ——
+          只能靠手输 URL 才能到达，等于"功能做了但没人找得到"。
+          教师的工作流是"管理员预置 → 本人激活 → 才能登录"，所以入口必须放在登录页。
+        -->
+        <div class="login__actions">
+          <el-link type="primary" :underline="false" @click="router.push('/activate')">
+            首次使用？点此激活账号
+          </el-link>
+        </div>
+
         <p v-if="isDev" class="login__hint">开发环境默认管理员：admin / 1q2w3E*</p>
       </el-card>
     </div>
@@ -214,6 +245,12 @@ async function handleSubmit(): Promise<void> {
   margin: 16px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+/* 激活入口：与"开发环境提示"拉开距离，避免两条小字挤在一起看不出哪条能点 */
+.login__actions {
+  margin-top: 14px;
   text-align: center;
 }
 

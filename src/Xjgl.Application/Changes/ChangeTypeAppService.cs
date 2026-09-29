@@ -195,7 +195,6 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
                 nodeInput.MergeStrategy)
             {
                 AllowReject = nodeInput.AllowReject,
-                AllowDelegate = nodeInput.AllowDelegate,
                 TimeoutDays = nodeInput.TimeoutDays
             };
 
@@ -521,7 +520,6 @@ public class ChangeTypeAppService : XjglAppService, IChangeTypeAppService
                 RoleCode = n.RoleCode,
                 MergeStrategy = n.MergeStrategy,
                 AllowReject = n.AllowReject,
-                AllowDelegate = n.AllowDelegate,
                 TimeoutDays = n.TimeoutDays,
                 IsEnabled = n.IsEnabled,
                 Remark = n.Remark

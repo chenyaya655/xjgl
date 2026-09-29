@@ -20,7 +20,16 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-const active = computed(() => (route.name as string) ?? 'todo')
+/**
+ * 当前高亮的页签。
+ *
+ * 优先读 `meta.tab`：`photo/missing` 这类**子页面**的路由名不等于页签名，
+ * 若直接拿 route.name 比对，进入子页面时三个页签会全部不高亮 ——
+ * 老师会以为自己点丢了、然后反复点页签。子页面属于哪个页签，由路由自己声明。
+ */
+const active = computed(
+  () => (route.meta.tab as string | undefined) ?? (route.name as string) ?? 'todo'
+)
 const todoCount = ref(0)
 
 const canQueryAudit = computed(() => auth.can(MetadataPermissions.Chg.Audit.Query))

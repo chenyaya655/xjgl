@@ -35,6 +35,7 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
 
     private readonly IPhotoUploadService _uploadService;
     private readonly IPhotoCompensationService _compensationService;
+    private readonly IPhotoThumbnailService _thumbnailService;
     private readonly IPhotoContentService _contentService;
     private readonly IStudentAppService _studentAppService;
     private readonly IOrgAppService _orgAppService;
@@ -50,6 +51,7 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
     {
         _uploadService = GetRequiredService<IPhotoUploadService>();
         _compensationService = GetRequiredService<IPhotoCompensationService>();
+        _thumbnailService = GetRequiredService<IPhotoThumbnailService>();
         _contentService = GetRequiredService<IPhotoContentService>();
         _studentAppService = GetRequiredService<IStudentAppService>();
         _orgAppService = GetRequiredService<IOrgAppService>();
@@ -205,7 +207,7 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
     // ==================================================================
 
     [Fact]
-    public async Task 上传真实照片_登记尺寸并生成缩略图()
+    public async Task 上传真实照片_登记尺寸但缩略图由后台补齐()
     {
         RepairNas();
 
@@ -217,17 +219,33 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
         result.Success.ShouldBeTrue();
         result.Width.ShouldBe(1600);
         result.Height.ShouldBe(1200);
-        result.ThumbnailPath.ShouldNotBeNull();
 
+        // ★ 债 18：缩略图不再在上传请求内生成 —— 解码+缩放是 CPU 活，
+        // 一次 500 张的批次会把它变成几十秒的请求。
+        result.ThumbnailPath.ShouldBeNull("缩略图生成已移出上传请求");
         var row = await _photos.FindAsync(p => p.StudentId == student.Id);
 
         row.ShouldNotBeNull();
         row!.Width.ShouldBe(1600, "台账里的宽高是列表页决定「要不要拉原图」的依据");
         row.Height.ShouldBe(1200);
-        row.ThumbnailPath.ShouldNotBeNullOrWhiteSpace();
-        row.ThumbnailPath!.Contains("thumb").ShouldBeTrue();
+        row.ThumbnailPath.ShouldBeNullOrWhiteSpace();
 
-        File.Exists(NasPath(row.ThumbnailPath!)).ShouldBeTrue("缩略图应当与照片一起写到主存储");
+        // ★ 债 19：老照片走的是**同一条**补齐路径，所以这里顺带验证了那条路径可用
+        //
+        // 为什么必须传 school.Id（只补本校）而不是裸调：
+        // 这条队列会把"读不到原图的记录"每轮重新扫一遍，而测试库里这类记录
+        // 已经累积到 400+ 条、超过单轮上限 200 —— 裸调时本轮扫的全是那些陈年记录，
+        // 本用例刚上传的照片永远轮不上，断言就变成"Generated >= 1"却恒为 0。
+        // 指定学校后结果只取决于本用例自己造的数据。
+        var backfill = await _thumbnailService.EnsureThumbnailsAsync(schoolOrgId: school.Id);
+
+        backfill.Generated.ShouldBeGreaterThanOrEqualTo(1);
+
+        var updated = await _photos.FindAsync(p => p.StudentId == student.Id);
+
+        updated!.ThumbnailPath.ShouldNotBeNullOrWhiteSpace();
+        updated.ThumbnailPath!.Contains("thumb").ShouldBeTrue();
+        File.Exists(NasPath(updated.ThumbnailPath!)).ShouldBeTrue("补齐后缩略图应当落在主存储");
     }
 
     [Fact]
@@ -242,6 +260,10 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
 
         await _uploadService.UploadOneAsync(Request(student.Id, original));
 
+        // 只补本校：不指定学校时本轮扫到的是测试库里陈年的"原图读不到"记录
+        // （400+ 条 > 单轮上限 200），本用例的照片永远轮不上，见上面那条用例的说明。
+        await _thumbnailService.EnsureThumbnailsAsync(schoolOrgId: school.Id);
+
         var row = await _photos.FindAsync(p => p.StudentId == student.Id);
         var thumbnail = await File.ReadAllBytesAsync(NasPath(row!.ThumbnailPath!));
 
@@ -255,7 +277,7 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
     }
 
     [Fact]
-    public async Task 非图片内容_上传仍成功但没有尺寸与缩略图()
+    public async Task 非图片内容_被拒绝而不是照样入库()
     {
         RepairNas();
 
@@ -266,15 +288,16 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
         var result = await _uploadService.UploadOneAsync(
             Request(student.Id, System.Text.Encoding.UTF8.GetBytes("这不是图片，只是文本。")));
 
-        result.Success.ShouldBeTrue("照片本身照样存下来了，不该因为缩略图生成不了就判定上传失败");
-        result.Width.ShouldBe(0);
-        result.Height.ShouldBe(0);
-        result.ThumbnailPath.ShouldBeNull();
+        // ★ 债 20：从"放行但不生成缩略图"改为**直接拒收**。
+        // 放行的后果是存储里躺着不是图片的文件，而台账/缺照片名单/打印/导出
+        // 全都假设"有照片 = 有图可看"，最后表现为列表页白图、打印件空白。
+        result.Success.ShouldBeFalse("内容真实性校验必须拒收改了后缀的非图片文件");
+        result.ErrorMessage.ShouldNotBeNullOrWhiteSpace();
+        result.ErrorMessage!.ShouldContain("不是可识别的图片");
 
-        var row = await _photos.FindAsync(p => p.StudentId == student.Id);
-
-        row!.ThumbnailPath.ShouldBeNull();
-        row.Width.ShouldBe(0);
+        // 更关键的一条：拒收**不能留下台账记录** ——
+        // 留了的话「缺照片名单」会把它当成"这个学生已经有照片了"，从此不再提醒补交。
+        (await _photos.FindAsync(p => p.StudentId == student.Id)).ShouldBeNull();
     }
 
     // ==================================================================
@@ -290,6 +313,11 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
         var student = await CreateStudentAsync(school.Id);
 
         await _uploadService.UploadOneAsync(Request(student.Id, RealJpeg(1600, 1200)));
+
+        // 缩略图在上传请求内**不再生成**（债 18），所以要先补一次，
+        // 否则读取接口只能回落成原图，IsThumbnail 必然是 false。
+        // 只补本校：不指定学校会被测试库里陈年的"原图读不到"记录挤掉（见上面用例的说明）。
+        await _thumbnailService.EnsureThumbnailsAsync(schoolOrgId: school.Id);
 
         var content = await _contentService.GetAsync(student.Id, thumbnail: true);
 
@@ -387,7 +415,7 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
     // ==================================================================
 
     [Fact]
-    public async Task 降级上传_缩略图暂存本地_补偿后回放到主存储()
+    public async Task 降级上传_缩略图补齐落在本地降级区_补偿后回放到主存储()
     {
         RepairNas();
         var school = await CreateSchoolAsync();
@@ -401,6 +429,12 @@ public class PhotoThumbnailTests : XjglIntegrationTestBase
 
             degraded.Success.ShouldBeTrue();
             degraded.Degraded.ShouldBeTrue();
+
+            // NAS 坏着的时候补齐：写入走容错存储 → 熔断打开时直接写本地降级区
+            // （只补本校：理由同上面两条用例 —— 裸调会被陈年记录挤掉）
+            var backfill = await _thumbnailService.EnsureThumbnailsAsync(schoolOrgId: school.Id);
+
+            backfill.Generated.ShouldBeGreaterThanOrEqualTo(1);
 
             var row = await _photos.FindAsync(p => p.StudentId == student.Id);
 

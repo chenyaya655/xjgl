@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Shouldly;
@@ -143,6 +144,148 @@ public class TokenBucketRateLimiterTests
         var decision = await limiter.AcquireAsync(new RateLimitPolicy("broken", Capacity: 0, RefillPerSecond: 0), "user-e");
 
         decision.IsAllowed.ShouldBeTrue("策略配错时不应把人挡在门外");
+    }
+
+    // ------------------------------------------------------------------
+    // 配置化策略（债 27）
+    //
+    // 【为什么这几条必须有】
+    // 限流数值挪到配置之后，"配错"变成了一类新的、**只在现场出现**的故障：
+    // 策略名拼错、容量配成 0、维度名写错 —— 三种错法的表现完全不同，
+    // 而且都不在编译期。这里把它们逐条钉死：
+    //   - 名字拼错 → 抛异常（静默不限流比启动失败危险得多）
+    //   - 容量非法 → 退回默认（配成 0 会把全站打成 429）
+    //   - 维度名错 → 忽略该项并保留其余（不能静默用默认全集，那会让现场以为关掉了）
+    // ------------------------------------------------------------------
+
+    private static IRateLimitPolicyProvider PolicyProvider(params (string Key, string Value)[] settings)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(settings.ToDictionary(s => s.Key, s => (string?)s.Value))
+            .Build();
+
+        return new RateLimitPolicyProvider(
+            config, NullLogger<RateLimitPolicyProvider>.Instance);
+    }
+
+    [Fact]
+    public void 策略_配置里没写时回落到内置默认()
+    {
+        var provider = PolicyProvider();
+
+        var policy = provider.Get(RateLimitPolicies.PhotoUpload.Name);
+
+        policy.Capacity.ShouldBe(RateLimitPolicies.PhotoUpload.Capacity);
+        policy.RefillPerSecond.ShouldBe(RateLimitPolicies.PhotoUpload.RefillPerSecond);
+    }
+
+    [Fact]
+    public void 策略_配置里写了就用配置值()
+    {
+        var provider = PolicyProvider(
+            ("Xjgl:RateLimit:photo-upload:Capacity", "1"),
+            ("Xjgl:RateLimit:photo-upload:RefillPerSecond", "0.1"));
+
+        var policy = provider.Get(RateLimitPolicies.PhotoUpload.Name);
+
+        policy.Capacity.ShouldBe(1, "现场调参必须立刻生效，否则这个配置项等于没有");
+        policy.RefillPerSecond.ShouldBe(0.1);
+        policy.Name.ShouldBe(RateLimitPolicies.PhotoUpload.Name, "名字仍以内置常量为准");
+    }
+
+    [Fact]
+    public void 策略_名字拼错时抛异常_绝不静默放行()
+    {
+        var provider = PolicyProvider();
+
+        var ex = Should.Throw<InvalidOperationException>(() => provider.Get("photo-uplaod"));
+
+        ex.Message.ShouldContain("photo-upload", Case.Sensitive,
+            "报错要把可用策略列出来，否则现场只能去翻代码");
+    }
+
+    [Fact]
+    public void 策略_容量配成0时退回默认而不是把全站打成429()
+    {
+        // Capacity=0 的桶永远取不到令牌 —— 那等于把上传接口整个关掉，
+        // 而现场的本意可能只是"想调小一点"。这种情况下退回默认并告警才是对的。
+        var provider = PolicyProvider(
+            ("Xjgl:RateLimit:photo-upload:Capacity", "0"),
+            ("Xjgl:RateLimit:photo-upload:RefillPerSecond", "5"));
+
+        var policy = provider.Get(RateLimitPolicies.PhotoUpload.Name);
+
+        policy.Capacity.ShouldBe(RateLimitPolicies.PhotoUpload.Capacity);
+    }
+
+    [Fact]
+    public void 策略_补充速率配成负数时退回默认()
+    {
+        var provider = PolicyProvider(
+            ("Xjgl:RateLimit:photo-upload:Capacity", "5"),
+            ("Xjgl:RateLimit:photo-upload:RefillPerSecond", "-1"));
+
+        var policy = provider.Get(RateLimitPolicies.PhotoUpload.Name);
+
+        policy.RefillPerSecond.ShouldBe(RateLimitPolicies.PhotoUpload.RefillPerSecond);
+    }
+
+    [Fact]
+    public void 策略_只配了一半时另一半用默认()
+    {
+        var provider = PolicyProvider(("Xjgl:RateLimit:photo-upload:Capacity", "9"));
+
+        var policy = provider.Get(RateLimitPolicies.PhotoUpload.Name);
+
+        policy.Capacity.ShouldBe(9);
+        policy.RefillPerSecond.ShouldBe(RateLimitPolicies.PhotoUpload.RefillPerSecond);
+    }
+
+    [Fact]
+    public void 维度_没配置时用默认全集()
+    {
+        var provider = PolicyProvider();
+
+        provider.GetDimensions(RateLimitPolicies.PhotoUpload.Name)
+            .ShouldBe(RateLimitDimensions.Default);
+    }
+
+    [Fact]
+    public void 维度_按配置裁剪()
+    {
+        var provider = PolicyProvider(
+            ("Xjgl:RateLimit:export-task:Dimensions:0", "user"),
+            ("Xjgl:RateLimit:export-task:Dimensions:1", "ip"));
+
+        provider.GetDimensions(RateLimitPolicies.ExportTask.Name)
+            .ShouldBe(new[] { "user", "ip" });
+    }
+
+    [Fact]
+    public void 维度_含未知项时只忽略该项并保留其余()
+    {
+        // 静默用默认全集会让现场以为"我关掉了 IP 维度"却没关掉；
+        // 抛异常则会把限流接口打成 500。所以正确行为是"忽略那一项 + 保留其余 + 告警"。
+        var provider = PolicyProvider(
+            ("Xjgl:RateLimit:export-task:Dimensions:0", "user"),
+            ("Xjgl:RateLimit:export-task:Dimensions:1", "school"),
+            ("Xjgl:RateLimit:export-task:Dimensions:2", "global"));
+
+        provider.GetDimensions(RateLimitPolicies.ExportTask.Name)
+            .ShouldBe(new[] { "user", "global" }, "未知维度 school 被忽略，其余保留");
+    }
+
+    [Fact]
+    public void 维度_全部写错时回落到默认全集而不是空集()
+    {
+        // 空集意味着"一个维度都不限" —— 那等于限流整个失效，
+        // 而调用方传的明明是一个合法策略名。
+        var provider = PolicyProvider(
+            ("Xjgl:RateLimit:export-task:Dimensions:0", "school"),
+            ("Xjgl:RateLimit:export-task:Dimensions:1", "ipv6"));
+
+        provider.GetDimensions(RateLimitPolicies.ExportTask.Name)
+            .ShouldBe(RateLimitDimensions.Default);
     }
 
     // ------------------------------------------------------------------

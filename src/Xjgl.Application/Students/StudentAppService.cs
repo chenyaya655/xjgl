@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Volo.Abp;
@@ -8,6 +9,7 @@ using Xjgl.Codes;
 using Xjgl.Data;
 using Xjgl.Organizations;
 using Xjgl.Permissions;
+using Xjgl.Photos;
 using Xjgl.Sequences;
 using Xjgl.Settings;
 using Xjgl.Text;
@@ -34,6 +36,16 @@ public class StudentAppService : XjglAppService, IStudentAppService
     private readonly IClock _clock;
     private readonly IUserDataScopeProvider _dataScopeProvider;
 
+    // 级联软删（债 17）需要的六张子表 + 留痕 + 照片
+    private readonly IXjglRepository<StuGuardian> _guardians;
+    private readonly IXjglRepository<StuResume> _resumes;
+    private readonly IXjglRepository<StuReward> _rewards;
+    private readonly IXjglRepository<StuPunishment> _punishments;
+    private readonly IXjglRepository<StuSubsidy> _subsidies;
+    private readonly IXjglRepository<StuPhysical> _physicals;
+    private readonly IXjglRepository<StuChangeLog> _changeLogs;
+    private readonly IXjglRepository<StuPhoto> _photos;
+
     /// <summary>身份证件的加密 / 摘要 / 脱敏（与监护人子表共用同一套规则）。</summary>
     private readonly IIdCardProtector _idCards;
 
@@ -55,7 +67,15 @@ public class StudentAppService : XjglAppService, IStudentAppService
         IUserDataScopeProvider dataScopeProvider,
         IIdCardProtector idCards,
         IStudentAccessGuard guard,
-        IStudentChangeLogger changeLogger)
+        IStudentChangeLogger changeLogger,
+        IXjglRepository<StuGuardian> guardians,
+        IXjglRepository<StuResume> resumes,
+        IXjglRepository<StuReward> rewards,
+        IXjglRepository<StuPunishment> punishments,
+        IXjglRepository<StuSubsidy> subsidies,
+        IXjglRepository<StuPhysical> physicals,
+        IXjglRepository<StuChangeLog> changeLogs,
+        IXjglRepository<StuPhoto> photos)
     {
         _students = students;
         _orgs = orgs;
@@ -69,6 +89,14 @@ public class StudentAppService : XjglAppService, IStudentAppService
         _idCards = idCards;
         _guard = guard;
         _changeLogger = changeLogger;
+        _guardians = guardians;
+        _resumes = resumes;
+        _rewards = rewards;
+        _punishments = punishments;
+        _subsidies = subsidies;
+        _physicals = physicals;
+        _changeLogs = changeLogs;
+        _photos = photos;
     }
 
     // ------------------------------------------------------------------
@@ -270,6 +298,73 @@ public class StudentAppService : XjglAppService, IStudentAppService
 
         // 说明：学生若处于在途异动流程中，P3 完成后要在这里拒绝删除
         await _students.DeleteAsync(entity, autoSave: true);
+
+        await CascadeSoftDeleteAsync(entity.Id);
+    }
+
+    /// <summary>
+    /// 级联软删学生的全部下属数据（债 17）。
+    ///
+    /// 【为什么删除学生必须连带处理子表】
+    /// 子表（监护人 / 简历 / 奖励 / 处分 / 资助 / 体检）与变更留痕都是**独立路由**，
+    /// 主档软删之后它们仍然是 `is_deleted = false`。后果有两层：
+    ///   1) 直接查子表的统计与清理脚本会把"已删学生"的数据算进去；
+    ///   2) 监护人表里有**身份证号（加密）**与联系电话 —— 学生档案删了，
+    ///      这些个人敏感信息还留在库里，属于"以为删了其实没删"。
+    ///
+    /// 【为什么是软删而不是物理删】
+    /// 主档本身是软删（可恢复），子表也必须同口径 —— 否则"恢复学生"会得到一个
+    /// 档案残缺的人。软删同时保留了删除审计（谁在什么时候删的）。
+    ///
+    /// 【为什么逐表 DeleteManyAsync 而不是一条 SQL】
+    /// 仓储刻意不暴露"跨表批量更新"（见 <c>IXjglRepository</c> 的设计说明），
+    /// 而软删需要经过仓储写入 `IsDeleted / DeleterId / DeletionTime`。
+    /// 逐表一次查询 + 一次批量删除，是当前分层下的正确做法；
+    /// 7 张表都是按 `student_id` 过滤，命中索引，开销可以忽略。
+    ///
+    /// 【照片为什么也一起软删，但不删文件】
+    /// 照片记录与学生档案同生命周期（缺照片名单、导出清单都以主表为准），
+    /// 所以记录必须软删，否则台账里会出现"查不到这个学生、却查得到他的照片"。
+    /// 但**NAS 上的图片文件不在这里删**：照片存储有自己的补偿/对账机制，
+    /// 在删除学生的路径里顺手删文件会让"删错了想恢复"变成不可逆操作。
+    ///
+    /// 【变更留痕**不删** —— 这一点与上面六张子表正好相反】
+    /// 留痕是审计数据，它的价值恰恰在于"主档没了之后仍然查得到"：
+    /// 「谁在什么时候把哪个学生（姓名 + 学籍辅号）删了」是这次删除**唯一**的凭证。
+    /// 把留痕跟着一起软删，等于删完什么都不剩 —— 实测就是这么栽的：
+    /// 加上级联之后 `删除学生_记录删除流水并保留姓名与辅号` 立刻变红，
+    /// 那条用例原本就明确写着"学生删掉之后，流水里仍要能看出这是谁"。
+    /// 审计数据与业务数据的生命周期**必须分开考虑**，不能因为"都是子表"就一起处理。
+    /// </summary>
+    private async Task CascadeSoftDeleteAsync(Guid studentId)
+    {
+        // 每张子表：先取 Id 再批量软删。用 GetListAsync 而不是 GetPagedListAsync，
+        // 是因为子表按学生过滤后的行数天然有界（一个学生的家长/奖励数量是几个人到几十条）。
+        await SoftDeleteChildrenAsync(_guardians, g => g.StudentId == studentId);
+        await SoftDeleteChildrenAsync(_resumes, r => r.StudentId == studentId);
+        await SoftDeleteChildrenAsync(_rewards, r => r.StudentId == studentId);
+        await SoftDeleteChildrenAsync(_punishments, p => p.StudentId == studentId);
+        await SoftDeleteChildrenAsync(_subsidies, s => s.StudentId == studentId);
+        await SoftDeleteChildrenAsync(_physicals, p => p.StudentId == studentId);
+
+        await SoftDeleteChildrenAsync(_photos, p => p.StudentId == studentId);
+
+        // 变更留痕（_changeLogs）**刻意不在这里处理** —— 理由见上面的注释。
+    }
+
+    private static async Task SoftDeleteChildrenAsync<TEntity>(
+        IXjglRepository<TEntity> repository,
+        Expression<Func<TEntity, bool>> predicate)
+        where TEntity : class, Volo.Abp.Domain.Entities.IEntity<Guid>, new()
+    {
+        var ids = (await repository.GetListAsync(predicate)).Select(e => e.Id).ToList();
+
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await repository.DeleteManyAsync(ids, autoSave: true);
     }
 
     // 注意：单条学生的数据范围校验已上提到 Xjgl.Students.StudentAccessGuard。
@@ -362,7 +457,9 @@ public class StudentAppService : XjglAppService, IStudentAppService
             : input.StudentStatusCode!;
 
         entity.IsMigrantChild = input.IsMigrantChild;
+        entity.MigrantTypeCode = input.MigrantTypeCode;
         entity.IsLeftBehindChild = input.IsLeftBehindChild;
+        entity.LeftBehindTypeCode = input.LeftBehindTypeCode;
         entity.IsPoor = input.IsPoor;
         entity.IsDisabled = input.IsDisabled;
         entity.DisabilityCode = input.DisabilityCode;
@@ -458,7 +555,11 @@ public class StudentAppService : XjglAppService, IStudentAppService
 
             if (input.IncludeDescendantOrgs)
             {
+                // 「含下级」= 这棵树，**包含根自己**：所以路径前缀（后代）与组织 Id（本级）
+                // 两个条件要一起给，谓词里按"或"处理（见 BuildPredicate 的说明）。
+                // 只给前缀会让该组织自身的记录消失 —— 表现是"刚建完就查不到"。
                 pathPrefix = org.PathCode + ".";
+                exactSchoolId = org.Id;
             }
             else
             {
@@ -481,7 +582,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var selfUserId = selfOnly ? scope.UserId : null;
         var scopeChildPrefix = scopePathCode == null
             ? null
-            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+            : (scope.Scope == DataScopes.OrgOnly ? DataScopes.ImpossiblePathPrefix : scopePathCode + ".");
 
         return BuildPredicate(input, exactSchoolId, pathPrefix, scopePathCode, scopeChildPrefix, selfUserId);
     }
@@ -490,7 +591,8 @@ public class StudentAppService : XjglAppService, IStudentAppService
     /// 用于表达"仅本级"的哨兵前缀：一个在真实物化路径里不可能出现的字符。
     /// 这样"仅本级"就退化成"前缀永不匹配、只剩路径相等"，从而不必在表达式里写三元。
     /// </summary>
-    private const string ImpossiblePathPrefix = "\u0001";
+    // 哨兵前缀已上提到 DataScopes.ImpossiblePathPrefix：4 处查询都要用它，
+    // 各写一份的后果是"新加一处查询时漏掉它"，而漏掉会让 OrgOnly 静默放宽。
 
     private static System.Linq.Expressions.Expression<Func<StuStudent, bool>>? BuildPredicate(
         StudentQueryDto input,
@@ -503,6 +605,7 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var hasSchool = exactSchoolId.HasValue;
         var schoolId = exactSchoolId.GetValueOrDefault();
         var hasPath = !pathPrefix.IsNullOrWhiteSpace();
+        var hasSchoolOrPath = hasSchool || hasPath;
         var hasScopePath = !scopePathCode.IsNullOrWhiteSpace();
         var hasScopeChildPrefix = !scopeChildPrefix.IsNullOrWhiteSpace();
         var hasSelfOnly = selfUserId.HasValue;
@@ -528,8 +631,14 @@ public class StudentAppService : XjglAppService, IStudentAppService
         var keyword = input.Keyword?.Trim();
 
         return s =>
-            (!hasSchool || s.SchoolOrgId == schoolId) &&
-            (!hasPath || (s.SchoolPathCode != null && s.SchoolPathCode.StartsWith(pathPrefix!))) &&
+            // 组织条件：显式指定了学校（本级）或指定了"含下级"时，两者是**或**的关系。
+            // 【为什么必须是或】`IncludeDescendantOrgs = true` 的语义是"这棵树"，
+            // 它当然**包含根自己**。原先写成两个 AND 的条件时，传 true 会把
+            // 该组织自身的记录排除掉（只剩后代）—— 而界面上的表现是
+            // "刚建完的这条查不到"，看起来像保存失败。
+            (!hasSchoolOrPath
+             || (hasSchool && s.SchoolOrgId == schoolId)
+             || (hasPath && s.SchoolPathCode != null && s.SchoolPathCode.StartsWith(pathPrefix!))) &&
             // 数据范围：路径完全相等，或落在"我的路径."前缀之下（仅本级时前缀不可能命中）
             (!hasScopePath || (s.SchoolPathCode != null &&
                 (s.SchoolPathCode == scopePathCode

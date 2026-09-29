@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

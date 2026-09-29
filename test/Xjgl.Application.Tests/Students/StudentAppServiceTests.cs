@@ -343,12 +343,32 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
             Name = "学生测试省厅"
         });
 
+        // 必须补齐"市 → 县"两级：学校只能挂在县区下（见 OrgAppService.EnsureHierarchy），
+        // 直接建在省厅下会被拒绝。市局/县局的编码没有格式要求 ——
+        // 只有**学校**必须是 10 位学校标识码（学籍辅号的 {SchoolCode:10} 段依赖它）；
+        // 这里沿用 GUID 片段而不是随机 6 位行政区划码，是为了不随测试库累积而撞号。
+        var city = await _orgAppService.CreateAsync(new CreateUpdateOrgDto
+        {
+            OrgType = OrgTypes.City,
+            Code = "9" + Guid.NewGuid().ToString("N")[..8],
+            Name = "学生测试市局",
+            ParentId = province.Id
+        });
+
+        var county = await _orgAppService.CreateAsync(new CreateUpdateOrgDto
+        {
+            OrgType = OrgTypes.County,
+            Code = "9" + Guid.NewGuid().ToString("N")[..8],
+            Name = "学生测试县局",
+            ParentId = city.Id
+        });
+
         var school = await _orgAppService.CreateAsync(new CreateUpdateOrgDto
         {
             OrgType = OrgTypes.School,
             Code = "41" + Random.Shared.Next(10000000, 99999999),
             Name = "下属学校",
-            ParentId = province.Id
+            ParentId = county.Id
         });
 
         var student = await CreateStudentAsync(school.Id, "下属学校学生");
@@ -424,6 +444,49 @@ public class StudentAppServiceTests : XjglIntegrationTestBase
         updated.StudentNo.ShouldBe(student.StudentNo); // 学籍辅号不随信息修改变化
         updated.HouseholdAddress.ShouldBe("河南省郑州市金水区某某路 1 号");
         updated.IsLeftBehindChild.ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// 随迁子女 / 留守儿童**类型码**必须能写进去。
+    ///
+    /// 这条用例守的是一个很隐蔽的缺口：`StudentDto`（详情）与实体
+    /// `StuStudent` 都有 `MigrantTypeCode` / `LeftBehindTypeCode`，
+    /// 但 `CreateUpdateStudentDto` **漏了这两个字段** ——
+    /// 于是新增/修改接口根本传不进来，字段恒为 null，
+    /// 而"详情里字段存在、界面上也有这一栏"让人以为功能是好的。
+    /// 只在导出/详情里回读，永远读不到值。
+    /// </summary>
+    [Fact]
+    public async Task 随迁与留守儿童类型码能写入并回读()
+    {
+        var school = await CreateSchoolAsync();
+        var student = await CreateStudentAsync(school.Id, "类型码");
+
+        var updated = await _studentAppService.UpdateAsync(student.Id, new CreateUpdateStudentDto
+        {
+            Name = student.Name,
+            GenderCode = student.GenderCode,
+            BirthDate = student.BirthDate,
+            IdCardTypeCode = "1",
+            // 修改必须重新传明文身份证：详情接口只回脱敏值（加密存储）
+            IdCardNumber = NewUniqueIdCard(),
+            SchoolOrgId = school.Id,
+            AcademicYear = Year,
+            IsMigrantChild = true,
+            MigrantTypeCode = "01",
+            IsLeftBehindChild = true,
+            LeftBehindTypeCode = "02"
+        });
+
+        updated.IsMigrantChild.ShouldBeTrue();
+        updated.MigrantTypeCode.ShouldBe("01");
+        updated.IsLeftBehindChild.ShouldBeTrue();
+        updated.LeftBehindTypeCode.ShouldBe("02");
+
+        // 回读一次，确认落库而不只是返回值上带了
+        var reloaded = await _studentAppService.GetAsync(student.Id);
+        reloaded.MigrantTypeCode.ShouldBe("01");
+        reloaded.LeftBehindTypeCode.ShouldBe("02");
     }
 
     [Fact]

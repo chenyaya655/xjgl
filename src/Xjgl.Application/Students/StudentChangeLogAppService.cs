@@ -27,7 +27,8 @@ public class StudentChangeLogAppService : XjglAppService, IStudentChangeLogAppSe
     /// 为什么不直接返回空：查询谓词在 SqlSugar 里无法用"恒假表达式"短路
     /// （`s => false` 会抛异常，本项目实测踩过），因此只能给一个绝不可能命中的前缀。
     /// </summary>
-    private const string ImpossiblePathPrefix = "\u0001";
+    // 哨兵前缀已上提到 DataScopes.ImpossiblePathPrefix：4 处查询都要用它，
+    // 各写一份的后果是"新加一处查询时漏掉它"，而漏掉会让 OrgOnly 静默放宽。
 
     private const string QueryPermission = MetadataPermissions.Stu.Student.Query;
 
@@ -104,13 +105,15 @@ public class StudentChangeLogAppService : XjglAppService, IStudentChangeLogAppSe
         var scopePathCode = scope.IsUnrestricted ? null : scope.OrgPathCode;
         var scopeChildPrefix = scopePathCode == null
             ? null
-            : (scope.Scope == DataScopes.OrgOnly ? ImpossiblePathPrefix : scopePathCode + ".");
+            : (scope.Scope == DataScopes.OrgOnly ? DataScopes.ImpossiblePathPrefix : scopePathCode + ".");
         var hasScopePath = !string.IsNullOrWhiteSpace(scopePathCode);
         var hasScopeChildPrefix = !string.IsNullOrWhiteSpace(scopeChildPrefix);
 
         var hasAction = !input.Action.IsNullOrWhiteSpace();
         var hasFrom = input.From.HasValue;
         var hasTo = input.To.HasValue;
+        var hasStudent = input.StudentId.HasValue;
+        var hasKeyword = !input.Keyword.IsNullOrWhiteSpace();
 
         // 值必须先在表达式外算好：直接在谓词里写三元或调用方法，SqlSugar 翻译不了
         // （本项目在学员与照片模块都踩过：`s => false` 抛异常、三元变成 SqlFunc.IIF 报
@@ -118,9 +121,12 @@ public class StudentChangeLogAppService : XjglAppService, IStudentChangeLogAppSe
         var action = input.Action?.Trim();
         var from = input.From ?? default;
         var to = input.To ?? default;
+        var studentId = input.StudentId ?? default;
+        var keyword = input.Keyword?.Trim();
 
         Expression<Func<StuChangeLog, bool>>? predicate =
-            scope.IsUnrestricted && !hasAction && !hasFrom && !hasTo
+            scope.IsUnrestricted
+            && !hasAction && !hasFrom && !hasTo && !hasStudent && !hasKeyword
                 ? null
                 : l =>
                     (scope.IsUnrestricted
@@ -129,7 +135,11 @@ public class StudentChangeLogAppService : XjglAppService, IStudentChangeLogAppSe
                          && l.SchoolPathCode.StartsWith(scopeChildPrefix!)))
                     && (!hasAction || l.Action == action)
                     && (!hasFrom || l.OccurredAt >= from)
-                    && (!hasTo || l.OccurredAt <= to);
+                    && (!hasTo || l.OccurredAt <= to)
+                    // ★ StudentId 以前**没被读**：传了也会返回全部流水（见 DTO 上的说明）
+                    && (!hasStudent || l.StudentId == studentId)
+                    // 与 StudentAppService 的关键字口径一致：只匹配姓名与学籍辅号
+                    && (!hasKeyword || l.StudentName.Contains(keyword!) || l.StudentNo.Contains(keyword!));
 
         var total = await _logs.GetCountAsync(predicate);
         var sorting = input.Sorting ?? "OccurredAt DESC";

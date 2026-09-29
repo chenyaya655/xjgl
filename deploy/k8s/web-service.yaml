@@ -1,0 +1,24 @@
+# 河南省学籍管理系统 —— PC 端（Service）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 名字必须叫 `web`（Ingress 的默认后端指向它）。
+# 端口 80 是 web.Dockerfile 里 nginx 的监听端口。
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector:
+    app: xjgl-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

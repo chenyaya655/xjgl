@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { changeTypeApi, codeApi, orgApi } from '@/api'
+import { changeTypeApi, orgApi } from '@/api'
 import type {
   ChangeFlowTemplate,
   ChangeType,
@@ -12,7 +12,6 @@ import type {
   PreviewFlowResult
 } from '@/api/types'
 import {
-  ApproveLevelNames,
   ApproveLevels,
   ChangeMergeStrategies,
   ChangeMergeStrategyNames,
@@ -21,6 +20,7 @@ import {
 } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import SchoolSelect from '@/components/SchoolSelect.vue'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { flattenSchools } from '@/utils/org'
@@ -54,31 +54,26 @@ const schools = ref<OrgDto[]>([])
  * 也就是说：配错一次，审批一次，就给学生写上了一个码表里不存在的状态值。
  * 后端也加了同样的校验（ChangeTypeAppService.EnsureStudentStatusCodesAsync），
  * 双保险：前端不给错选项，后端不接受错值。
+ *
+ * 现在统一走 `useCodeOptions`（债 12）：这是第三处"自己拉一遍码表"的代码，
+ * 再复制下去必然漂移（并发去重、失败降级、翻译函数各写一遍）。
  */
-const studentStatusOptions = ref<{ value: string; label: string }[]>([])
+const statusCodes = useCodeOptions(CodeCategories.StudentStatus)
+const studentStatusOptions = statusCodes.options
 
 function statusLabel(code?: string | null): string {
-  if (!code) {
-    return '—'
-  }
-
-  return studentStatusOptions.value.find((o) => o.value === code)?.label ?? code
+  // 码表没载入时退回显示码值本身，而不是显示"—"：
+  // 用户至少还能看到存的是什么，便于排查"这个值是不是码表里没有"
+  return statusCodes.nameOf(code) ?? code ?? '—'
 }
 
-async function loadStudentStatusOptions(): Promise<void> {
-  try {
-    const items = await codeApi.getItemsByCode('STUDENT_STATUS')
-
-    studentStatusOptions.value = items.map((i) => ({ value: i.code, label: i.name }))
-  } catch {
-    studentStatusOptions.value = []
-  }
-}
-
-const levelOptions = Object.values(ApproveLevels).map((v) => ({
-  value: v,
-  label: ApproveLevelNames[v]
-}))
+/**
+ * 最高审核级别下拉项**来自码表**（APPROVE_LEVEL），不再用共享包里手写的
+ * `ApproveLevelNames`：那是第二份中文名，与码表各改各的。
+ * 码值本身仍用 `ApproveLevels` 常量（那是值，不是显示名）。
+ */
+const levelCodes = useCodeOptions(CodeCategories.ApproveLevel)
+const levelOptions = levelCodes.options
 
 // ---------------------------------------------------------------------------
 // 类型列表
@@ -119,6 +114,8 @@ function emptyType(): CreateUpdateChangeType {
     allowCrossAcademicYear: false,
     maxApplyTimesPerYear: 1,
     gradeScope: null,
+    // 默认**不要求**证明材料：要求了就必须有人真去传，否则批准会被挡下。
+    // 默认关掉意味着"升级不改变现有类型的行为"（与本项目其它新增开关同一取舍）。
     requireAttachment: false,
     sort: 10,
     isEnabled: true,
@@ -223,7 +220,6 @@ async function openFlow(row: ChangeType): Promise<void> {
           roleCode: n.roleCode,
           mergeStrategy: n.mergeStrategy,
           allowReject: n.allowReject,
-          allowDelegate: n.allowDelegate,
           timeoutDays: n.timeoutDays
         }))
       : defaultNodes()
@@ -262,7 +258,6 @@ function node(
     roleCode,
     mergeStrategy: ChangeMergeStrategies.MergeToLast,
     allowReject: true,
-    allowDelegate: false,
     timeoutDays: 5
   }
 }
@@ -388,13 +383,14 @@ function mergeText(mergedFromSeqs: number[]): string {
 }
 
 onMounted(async () => {
-  try {
-    schools.value = flattenSchools(await orgApi.getTree())
-  } catch {
-    schools.value = []
-  }
+  // 码表与组织树并行拉取（互不依赖）
+  const [, tree] = await Promise.all([
+    Promise.all([statusCodes.load(), levelCodes.load()]),
+    orgApi.getTree().catch(() => [] as OrgDto[])
+  ])
 
-  await loadStudentStatusOptions()
+  schools.value = flattenSchools(tree)
+
   await load()
 })
 </script>
@@ -445,6 +441,13 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="跨校" width="70" align="center">
           <template #default="{ row }">{{ row.allowCrossSchool ? '允许' : '不允许' }}</template>
+        </el-table-column>
+        <el-table-column label="证明材料" width="100" align="center">
+          <template #default="{ row }">
+            <!-- 这一列是给经办人看的："这个类型要传材料"，不然他只会在审批被拒时才知道 -->
+            <el-tag v-if="row.requireAttachment" type="warning" size="small">必须上传</el-tag>
+            <span v-else class="chg-type__muted">不要求</span>
+          </template>
         </el-table-column>
         <el-table-column label="流程" width="120" align="center">
           <template #default="{ row }">
@@ -569,7 +572,13 @@ onMounted(async () => {
           <el-checkbox v-model="form.affectClass">影响班级</el-checkbox>
           <el-checkbox v-model="form.needPeerSchoolConfirm">需对方学校确认</el-checkbox>
           <el-checkbox v-model="form.allowCrossAcademicYear">允许跨学年</el-checkbox>
-          <el-checkbox v-model="form.requireAttachment">必须上传附件</el-checkbox>
+          <!--
+            「必须上传证明材料」：这个开关**真的有行为**了 ——
+            勾上之后，申请单在**没有任何附件时无法批准**（拦在第一次批准之前，
+            见 ChangeFlowAppService.EnsureAttachmentRequirementAsync）。
+            校验点为什么不在提交时：提交那一刻申请单还不存在，没有 applyId 可挂附件。
+          -->
+          <el-checkbox v-model="form.requireAttachment">必须上传证明材料</el-checkbox>
           <el-checkbox v-model="form.isEnabled">启用</el-checkbox>
         </el-form-item>
 
@@ -641,6 +650,16 @@ onMounted(async () => {
                   :value="value"
                 />
               </el-select>
+            </template>
+          </el-table-column>
+          <!--
+            「允许驳回」必须能在这里配：后端在审核时按这个开关拦驳回（Xjgl:00608），
+            此前它只是个存得下、界面没有、审核也不看的字段 ——
+            也就是"配置等于没配"。默认开启，与后端 DTO 的默认值一致。
+          -->
+          <el-table-column label="允许驳回" width="90" align="center">
+            <template #default="{ row }">
+              <el-checkbox v-model="row.allowReject" />
             </template>
           </el-table-column>
           <el-table-column label="时限(天)" width="90">
@@ -756,6 +775,11 @@ onMounted(async () => {
   color: var(--el-text-color-secondary);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.chg-type__muted {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .chg-type__flow-actions {

@@ -1,15 +1,36 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { orgApi, studentApi, studentImportApi, studentPrintApi, codeApi } from '@xjgl/api'
-import type { ImportColumn, ImportStudentsResult, OrgDto, StudentListItem } from '@xjgl/api'
+import {
+  exportTaskApi,
+  orgApi,
+  studentApi,
+  studentImportApi,
+  describeTruncation,
+  saveBlob
+} from '@xjgl/api'
+import type {
+  CreateUpdateStudent,
+  ExportTask,
+  ImportColumn,
+  ImportStudentsResult,
+  OrgDto,
+  StudentDetail,
+  StudentDuplicateCheckResult,
+  StudentListItem
+} from '@xjgl/api'
+import type { FormInstance, FormRules } from 'element-plus'
 import AppIcon from '@/components/AppIcon.vue'
+import GradeClassSelect from '@/components/GradeClassSelect.vue'
 import SchoolSelect from '@/components/SchoolSelect.vue'
+import StudentChangeLogDialog from '@/components/StudentChangeLogDialog.vue'
 import StudentProfileDrawer from '@/components/StudentProfileDrawer.vue'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
-import { flattenSchools } from '@/utils/org'
+import { currentAcademicYear, flattenSchools } from '@/utils/org'
+import { probeCsvEncoding } from '@/utils/csvEncoding'
 
 /**
  * 学生列表。
@@ -31,8 +52,20 @@ const query = reactive({
   schoolOrgId: undefined as string | undefined,
   keyword: '',
   studentStatusCode: undefined as string | undefined,
+  // 年级 / 班级筛选：**后端一直支持**（StudentQueryDto.GradeId/ClassId），
+  // 但界面此前没有入口 —— 学校最常用的"看六年级的名单"只能靠关键字凑。
+  gradeId: undefined as string | undefined,
+  classId: undefined as string | undefined,
   maxResultCount: 20
 })
+
+/**
+ * 学年：年级与班级都挂在「学校 + 学年」下，所以这两个下拉必须先有学年。
+ * 用户不需要为了筛选而主动填它 —— 回落到当前学年即可（可手改）。
+ */
+const academicYear = ref(currentAcademicYear())
+
+const gradeClassSelect = ref<{ reset: () => void } | null>(null)
 
 /** 当前页码（1 起）。分页组件用的是页码，接口要的是 skipCount，两者在这里换算。 */
 const page = ref(1)
@@ -45,8 +78,12 @@ const page = ref(1)
  *   1) 按状态过滤时后端拿 'Studying' 去比对，**静默返回空列表**（HTTP 200，不报错）；
  *   2) 表格里的状态标签也用这个字符串判断，于是所有状态都渲染成灰色。
  * 改成从码表取值，就不会再出现"前端一套值、后端一套值"。
+ *
+ * 现在这段逻辑收敛到 `useCodeOptions`（债 12）：本页面是第二个写这段代码的地方，
+ * 再复制一份必然会漂移（码表拉取方式、并发去重、失败降级都得各写一遍）。
  */
-const statusOptions = ref<{ value: string; label: string }[]>([])
+const statusCodes = useCodeOptions(CodeCategories.StudentStatus)
+const statusOptions = statusCodes.options
 
 /** 在校状态码（与后端 StudentStatuses.IsInSchool 的含义一致：在读/复学/转入）。 */
 const IN_SCHOOL_CODES = ['01', '03', '05']
@@ -62,14 +99,8 @@ async function loadSchools(): Promise<void> {
 }
 
 async function loadStatusOptions(): Promise<void> {
-  try {
-    const items = await codeApi.getItemsByCode('STUDENT_STATUS')
-
-    statusOptions.value = items.map((i) => ({ value: i.code, label: i.name }))
-  } catch {
-    // 码表拿不到时下拉框为空，但列表仍可用（过滤功能降级，不阻塞页面）
-    statusOptions.value = []
-  }
+  // 失败不阻塞列表：码表拉不到时下拉框为空，但关键字/学校过滤仍可用
+  await statusCodes.load()
 }
 
 async function load(): Promise<void> {
@@ -80,8 +111,10 @@ async function load(): Promise<void> {
       schoolOrgId: query.schoolOrgId,
       keyword: query.keyword || undefined,
       studentStatusCode: query.studentStatusCode,
-      skipCount: (page.value - 1) * query.maxResultCount,
+      gradeId: query.gradeId,
+      classId: query.classId,
       maxResultCount: query.maxResultCount,
+      skipCount: (page.value - 1) * query.maxResultCount,
       sorting: 'StudentNo ASC'
     })
 
@@ -101,6 +134,14 @@ function reset(): void {
   query.schoolOrgId = undefined
   query.keyword = ''
   query.studentStatusCode = undefined
+  query.gradeId = undefined
+  query.classId = undefined
+  academicYear.value = currentAcademicYear()
+
+  // 只清 v-model 是不够的：年级/班级下拉的**选项列表**还留在子组件里，
+  // 于是界面会出现"学校已清空、年级里却还列着上一所学校的年级"
+  gradeClassSelect.value?.reset()
+
   search()
 }
 
@@ -121,32 +162,444 @@ function openProfile(row: StudentListItem): void {
 }
 
 // ---------------------------------------------------------------------------
+// 变更留痕（全局，见 StudentChangeLogDialog 的说明）
+// ---------------------------------------------------------------------------
+
+/**
+ * 全局留痕做成这个页面上的对话框，而不是新开菜单/路由。
+ *
+ * 本系统的路由与菜单完全由后端元数据（`sys_module`）驱动，独立页面就必须
+ * 在「模块管理」里多一条模块记录、再给每个角色授权；而"查留痕"在业务上
+ * 不是一个新的功能入口，它就是学生管理的一部分，权限也正好复用
+ * 「能查学生」（`Stu.Student.Query`）—— 能看名单才谈得上核对谁改过什么。
+ */
+const changeLogVisible = ref(false)
+
+// ---------------------------------------------------------------------------
+// 学生主档：新增 / 修改 / 删除
+// ---------------------------------------------------------------------------
+
+/**
+ * 【这个模块为什么以前不存在】
+ * 页面上「新增学生」是一个**没有 @click 的按钮**，行操作里也只有「详情 / 学籍卡」——
+ * 而后端 `StudentAppService` 的 Create / Update / Delete / CheckDuplicate 一直是齐的。
+ * 后果是学生只能靠 CSV 导入建档、建错了只能改库。
+ *
+ * 【为什么「修改」必须让用户重新输入身份证号】
+ * 身份证是**加密存储**的，详情接口只回 `maskedIdCard`（前 6 后 4），
+ * 而 `UpdateAsync` 要用明文重算摘要并查重。界面因此无法"回显原值"，
+ * 只能要求重新输入 —— 这句话必须写在界面上，否则用户会以为保存把身份证弄丢了。
+ */
+type FormMode = 'create' | 'edit'
+
+const formVisible = ref(false)
+const formMode = ref<FormMode>('create')
+const editingId = ref<string | null>(null)
+/** 编辑时回显用的脱敏身份证号（明文拿不到，见上）。 */
+const editingMaskedIdCard = ref('')
+const saving = ref(false)
+const formRef = ref<FormInstance | null>(null)
+
+/** 查重结果：只在**确实查到重复**时提示，正常录入不被它打断。 */
+const duplicateChecking = ref(false)
+const duplicateResult = ref<StudentDuplicateCheckResult | null>(null)
+
+function emptyForm(): CreateUpdateStudent {
+  return {
+    name: '',
+    formerName: null,
+    genderCode: '',
+    birthDate: '',
+    idCardTypeCode: '1',
+    idCardNumber: '',
+    // 默认用当前筛选的学校：用户通常是"筛到某校 → 给这校建档"
+    schoolOrgId: query.schoolOrgId ?? '',
+    academicYear: academicYear.value || currentAcademicYear(),
+    // 年级/班级用 undefined（`GradeClassSelect` 的 v-model 类型是 string | undefined），
+    // 提交时统一转成 null
+    gradeId: undefined,
+    classId: undefined,
+    classStudentNo: null,
+    nationCode: null,
+    countryCode: null,
+    politicalCode: null,
+    nativePlace: null,
+    birthPlace: null,
+    householdNatureCode: null,
+    householdAddress: null,
+    homeAddress: null,
+    currentAddress: null,
+    phoneNumber: null,
+    postalCode: null,
+    email: null,
+    enrollDate: null,
+    enrollTypeCode: null,
+    studyModeCode: null,
+    schoolLengthCode: null,
+    // 留空：新增时后端默认「在读」；修改时下面会填入真实值
+    studentStatusCode: null,
+    isMigrantChild: false,
+    migrantTypeCode: null,
+    isLeftBehindChild: false,
+    leftBehindTypeCode: null,
+    isPoor: false,
+    isDisabled: false,
+    disabilityCode: null,
+    healthCode: null,
+    remark: null
+  }
+}
+
+const form = reactive<CreateUpdateStudent>(emptyForm())
+
+const formRules: FormRules = {
+  name: [{ required: true, message: '姓名不能为空', trigger: 'blur' }],
+  genderCode: [{ required: true, message: '请选择性别', trigger: 'change' }],
+  birthDate: [{ required: true, message: '请选择出生日期', trigger: 'change' }],
+  idCardTypeCode: [{ required: true, message: '请选择身份证件类型', trigger: 'change' }],
+  idCardNumber: [
+    { required: true, message: '身份证件号码不能为空', trigger: 'blur' },
+    { min: 15, max: 18, message: '身份证件号码长度应为 15~18 位', trigger: 'blur' }
+  ],
+  schoolOrgId: [{ required: true, message: '请选择学校', trigger: 'change' }],
+  academicYear: [
+    { required: true, message: '学年不能为空', trigger: 'blur' },
+    {
+      pattern: /^(\d{4}|\d{4}-\d{4})$/,
+      message: '学年格式应为 2025-2026',
+      trigger: 'blur'
+    }
+  ]
+}
+
+// 主档用到的码表全部走码值（不手写英文码），与筛选区共用同一个缓存
+const genderCodes = useCodeOptions(CodeCategories.Sex)
+const idTypeCodes = useCodeOptions(CodeCategories.IdType)
+const nationCodes = useCodeOptions(CodeCategories.Nation)
+const countryCodes = useCodeOptions(CodeCategories.Country)
+const politicalCodes = useCodeOptions(CodeCategories.Political)
+const householdCodes = useCodeOptions(CodeCategories.Household)
+const enrollTypeCodes = useCodeOptions(CodeCategories.EnrollType)
+const studyModeCodes = useCodeOptions(CodeCategories.StudyMode)
+const schoolLengthCodes = useCodeOptions(CodeCategories.SchoolLength)
+const disabilityCodes = useCodeOptions(CodeCategories.Disability)
+const migrantCodes = useCodeOptions(CodeCategories.Migrant)
+const leftBehindCodes = useCodeOptions(CodeCategories.LeftBehind)
+const healthCodes = useCodeOptions(CodeCategories.Health)
+
+let formCodesLoaded = false
+
+/** 懒加载主档码表：只在第一次打开对话框时拉，失败也不阻塞（下拉为空但可提交必填项）。 */
+async function loadFormCodeOptions(): Promise<void> {
+  if (formCodesLoaded) {
+    return
+  }
+
+  formCodesLoaded = true
+
+  await Promise.allSettled([
+    genderCodes.load(),
+    idTypeCodes.load(),
+    nationCodes.load(),
+    countryCodes.load(),
+    politicalCodes.load(),
+    householdCodes.load(),
+    enrollTypeCodes.load(),
+    studyModeCodes.load(),
+    schoolLengthCodes.load(),
+    disabilityCodes.load(),
+    migrantCodes.load(),
+    leftBehindCodes.load(),
+    healthCodes.load(),
+    statusCodes.load()
+  ])
+}
+
+/** 空串统一转 null：后端把这些字段当可空码值，`''` 会被当成"填了一个不存在的码"。 */
+function orNull(value?: string | null): string | null {
+  const text = (value ?? '').trim()
+
+  return text.length > 0 ? text : null
+}
+
+function openCreate(): void {
+  formMode.value = 'create'
+  editingId.value = null
+  editingMaskedIdCard.value = ''
+  duplicateResult.value = null
+  Object.assign(form, emptyForm())
+  formVisible.value = true
+
+  void loadFormCodeOptions().then(() => nextTick(() => formRef.value?.clearValidate()))
+}
+
+async function openEdit(row: StudentListItem): Promise<void> {
+  formMode.value = 'edit'
+  editingId.value = row.id
+  editingMaskedIdCard.value = row.maskedIdCard ?? ''
+  duplicateResult.value = null
+  Object.assign(form, emptyForm())
+  formVisible.value = true
+
+  await loadFormCodeOptions()
+
+  try {
+    const detail = await studentApi.get(row.id)
+
+    Object.assign(form, detailToForm(detail))
+    editingMaskedIdCard.value = detail.maskedIdCard ?? ''
+
+    await nextTick()
+    formRef.value?.clearValidate()
+  } catch {
+    // 详情拉不到就没法安全地改（缺字段会把值改坏），关掉对话框并说明
+    formVisible.value = false
+    ElMessage.error('读取学生详情失败，已取消修改。')
+  }
+}
+
+/**
+ * 详情 → 表单。
+ *
+ * `idCardNumber` 刻意置空：详情里只有脱敏值，明文是拿不到的（加密存储）。
+ * 用户不重新输入就无法通过后端校验 —— 这是**有意**的，不是缺陷。
+ */
+function detailToForm(detail: StudentDetail): CreateUpdateStudent {
+  return {
+    name: detail.name ?? '',
+    formerName: detail.formerName ?? null,
+    genderCode: detail.genderCode ?? '',
+    birthDate: (detail.birthDate ?? '').slice(0, 10),
+    idCardTypeCode: detail.idCardTypeCode ?? '1',
+    idCardNumber: '',
+    schoolOrgId: detail.schoolOrgId,
+    academicYear: detail.academicYear ?? currentAcademicYear(),
+    gradeId: detail.gradeId ?? undefined,
+    classId: detail.classId ?? undefined,
+    classStudentNo: detail.classStudentNo ?? null,
+    nationCode: detail.nationCode ?? null,
+    countryCode: detail.countryCode ?? null,
+    politicalCode: detail.politicalCode ?? null,
+    nativePlace: detail.nativePlace ?? null,
+    birthPlace: detail.birthPlace ?? null,
+    householdNatureCode: detail.householdNatureCode ?? null,
+    householdAddress: detail.householdAddress ?? null,
+    homeAddress: detail.homeAddress ?? null,
+    currentAddress: detail.currentAddress ?? null,
+    phoneNumber: detail.phoneNumber ?? null,
+    postalCode: detail.postalCode ?? null,
+    email: detail.email ?? null,
+    enrollDate: detail.enrollDate ? detail.enrollDate.slice(0, 10) : null,
+    enrollTypeCode: detail.enrollTypeCode ?? null,
+    studyModeCode: detail.studyModeCode ?? null,
+    schoolLengthCode: detail.schoolLengthCode ?? null,
+    studentStatusCode: detail.studentStatusCode ?? null,
+    isMigrantChild: detail.isMigrantChild,
+    migrantTypeCode: detail.migrantTypeCode ?? null,
+    isLeftBehindChild: detail.isLeftBehindChild,
+    leftBehindTypeCode: detail.leftBehindTypeCode ?? null,
+    isPoor: detail.isPoor,
+    isDisabled: detail.isDisabled,
+    disabilityCode: detail.disabilityCode ?? null,
+    healthCode: detail.healthCode ?? null,
+    remark: detail.remark ?? null
+  }
+}
+
+/**
+ * 提交前查重（身份证摘要 + 姓名 + 出生日期，跨校跨区）。
+ *
+ * 后端在写入时**也会**查一次并拒绝，这里提前查一次是为了把
+ * "这个人已经有学籍了"讲在填完表单之前，而不是让用户白填一遍。
+ * 查重接口本身失败时静默放过：它是提示，不是闸门（闸门在后端）。
+ */
+async function runDuplicateCheck(): Promise<void> {
+  duplicateResult.value = null
+
+  const name = form.name.trim()
+  const idCard = form.idCardNumber.trim()
+
+  // 没填够长度就查不了；也避免每敲一个字符打一次接口
+  if (!name || idCard.length < 15) {
+    return
+  }
+
+  duplicateChecking.value = true
+
+  try {
+    const result = await studentApi.checkDuplicate({
+      name,
+      idCardNumber: idCard,
+      birthDate: form.birthDate || null,
+      excludeId: editingId.value
+    })
+
+    duplicateResult.value = result.hasDuplicate ? result : null
+  } catch {
+    // 查重失败不挡录入（写入时后端还会查），静默即可
+    duplicateResult.value = null
+  } finally {
+    duplicateChecking.value = false
+  }
+}
+
+async function submitForm(): Promise<void> {
+  const valid = await formRef.value?.validate().catch(() => false)
+
+  if (!valid) {
+    return
+  }
+
+  saving.value = true
+
+  try {
+    const payload: CreateUpdateStudent = {
+      ...form,
+      name: form.name.trim(),
+      idCardNumber: form.idCardNumber.trim(),
+      genderCode: form.genderCode.trim(),
+      idCardTypeCode: form.idCardTypeCode.trim(),
+      academicYear: form.academicYear.trim(),
+      formerName: orNull(form.formerName),
+      classStudentNo: orNull(form.classStudentNo),
+      nationCode: orNull(form.nationCode),
+      countryCode: orNull(form.countryCode),
+      politicalCode: orNull(form.politicalCode),
+      nativePlace: orNull(form.nativePlace),
+      birthPlace: orNull(form.birthPlace),
+      householdNatureCode: orNull(form.householdNatureCode),
+      householdAddress: orNull(form.householdAddress),
+      homeAddress: orNull(form.homeAddress),
+      currentAddress: orNull(form.currentAddress),
+      phoneNumber: orNull(form.phoneNumber),
+      postalCode: orNull(form.postalCode),
+      email: orNull(form.email),
+      enrollTypeCode: orNull(form.enrollTypeCode),
+      studyModeCode: orNull(form.studyModeCode),
+      schoolLengthCode: orNull(form.schoolLengthCode),
+      // 开关关掉时把类型码一起清掉：否则会出现"不是随迁子女、却有随迁类型"的矛盾数据
+      migrantTypeCode: form.isMigrantChild ? orNull(form.migrantTypeCode) : null,
+      leftBehindTypeCode: form.isLeftBehindChild ? orNull(form.leftBehindTypeCode) : null,
+      disabilityCode: form.isDisabled ? orNull(form.disabilityCode) : null,
+      healthCode: orNull(form.healthCode),
+      remark: orNull(form.remark),
+      gradeId: form.gradeId || undefined,
+      classId: form.classId || undefined,
+      enrollDate: form.enrollDate || null,
+      studentStatusCode: orNull(form.studentStatusCode)
+    }
+
+    if (formMode.value === 'create') {
+      const created = await studentApi.create(payload)
+
+      ElMessage.success(`学生已建档，学籍辅号 ${created.studentNo}`)
+    } else if (editingId.value) {
+      await studentApi.update(editingId.value, payload)
+      ElMessage.success('学生信息已保存')
+    }
+
+    formVisible.value = false
+    await load()
+  } catch {
+    // 错误提示由 http 拦截器统一弹出（含后端 `data.reason`，如"身份证号已存在学籍记录"），
+    // 这里只负责**不关**对话框，让用户能改完再提交
+  } finally {
+    saving.value = false
+  }
+}
+
+async function removeStudent(row: StudentListItem): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除学生「${row.name}」（学籍辅号 ${row.studentNo}）吗？` +
+        '该学生的监护人 / 简历 / 奖励 / 处分 / 资助 / 体检与变更留痕会一并级联删除（软删除，可恢复）。',
+      '删除学生',
+      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  try {
+    await studentApi.remove(row.id)
+    ElMessage.success('学生已删除')
+    await load()
+  } catch {
+    // 拦截器已提示
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 打印（学籍卡 / 花名册）
 // ---------------------------------------------------------------------------
 
 const printingCard = ref(false)
 const printingRoster = ref(false)
 
-/** 用 Blob URL 触发下载：PDF 是二进制，不能走 window.open（带不上 Authorization 头）。 */
-function downloadBlob(blob: Blob, fileName: string): void {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
+/**
+ * 页面卸载后停止轮询。
+ *
+ * 少了这个，用户点了导出再立刻切走，定时器仍会每 1.5 秒打一次接口 ——
+ * 直到 5 分钟超时为止，而那时他早就不在这个页面了。
+ */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+})
 
-  link.href = url
-  link.download = fileName
-  link.click()
-  URL.revokeObjectURL(url)
+/**
+ * 提交一个导出/打印任务并等它完成，然后下载。
+ *
+ * 四个调用点共用这一条路径：提交 → 轮询 → 下载 → 提示。
+ * 每个调用点各写一遍的话，"忘了处理截断提示"或"忘了停轮询"迟早会发生。
+ */
+async function runExportTask(
+  input: Parameters<typeof exportTaskApi.run>[0],
+  suggestedName: string
+): Promise<void> {
+  progressText.value = '排队中…'
+
+  try {
+    const task = await exportTaskApi.run(input, {
+      shouldStop: () => disposed,
+      onProgress: (t: ExportTask) => {
+        // 让提示反映真实状态（排队中 → 执行中）
+        progressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+      }
+    })
+
+    const blob = await exportTaskApi.download(task.id)
+
+    // 用后端给的文件名（它带了人数/日期等有用信息），后端没给时才用兜底名
+    saveBlob(blob, task.fileName || suggestedName)
+
+    // 截断必须显式提示：名单类产出少人是最不能接受的失败方式，
+    // 而后端已经如实算出"少了几条"，这里只弹"成功"就等于把那份交代吞掉了。
+    const truncation = describeTruncation(task)
+
+    if (truncation) {
+      ElMessage.warning(truncation)
+    } else {
+      ElMessage.success(task.message ? `${task.kindName}已完成：${task.message}` : `${task.kindName}已完成`)
+    }
+  } finally {
+    // 无论成功、失败还是超时都要清掉，否则那行提示会一直留在页面上
+    progressText.value = ''
+  }
 }
+
+const progressText = ref('')
 
 async function printCard(row: StudentListItem): Promise<void> {
   printingCard.value = true
 
   try {
-    const blob = await studentPrintApi.studentCard(row.id)
-
-    downloadBlob(blob, `学籍卡_${row.name}_${row.studentNo}.pdf`)
-  } catch {
-    ElMessage.error('打印学籍卡失败，请稍后重试（若持续失败，请检查服务器字体配置）')
+    await runExportTask(
+      { kind: 'StudentCardPdf', studentId: row.id },
+      `学籍卡_${row.name}_${row.studentNo}.pdf`
+    )
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '打印学籍卡失败，请稍后重试')
   } finally {
     printingCard.value = false
   }
@@ -162,20 +615,22 @@ async function printRoster(): Promise<void> {
   printingRoster.value = true
 
   try {
-    const blob = await studentPrintApi.studentRoster({
-      schoolOrgId: query.schoolOrgId,
-      studentStatusCode: query.studentStatusCode,
-      keyword: query.keyword || undefined,
-      maxRows: 2000
-    })
-
-    const school = schools.value.find((s) => s.id === query.schoolOrgId)
-    const parts = ['花名册', school?.name, query.keyword].filter(Boolean)
-
-    downloadBlob(blob, `${parts.join('_')}.pdf`)
-    ElMessage.success('花名册已生成，请在下载目录查看')
-  } catch {
-    ElMessage.error('打印花名册失败，请稍后重试（若持续失败，请检查服务器字体配置）')
+    // maxRows 放到 10000（原来同步打印时是 2000）：任务式之后没有请求超时压力，
+    // 真正的上限由后端 Xjgl:Export:MaxRows 兜底，且超限会在 message 里如实说明。
+    await runExportTask(
+      {
+        kind: 'StudentRosterPdf',
+        rosterQuery: {
+          schoolOrgId: query.schoolOrgId,
+          studentStatusCode: query.studentStatusCode,
+          keyword: query.keyword || undefined,
+          maxRows: 10000
+        }
+      },
+      '花名册.pdf'
+    )
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '打印花名册失败，请稍后重试')
   } finally {
     printingRoster.value = false
   }
@@ -192,7 +647,10 @@ async function printRoster(): Promise<void> {
  * 传 5000 会被参数校验直接拒掉（HTTP 400）。
  * 第一版这里写的就是 5000 —— 表现是"点导出没反应"（前端弹错误提示、不下载），
  * 而集成测试直接调服务层、绕过了 DTO 校验，所以一直没暴露，直到端到端测试才抓到。
- * 导出服务内部自己分页累积（每页 1000，上限 5000 行），不需要调用方指定。
+ *
+ * 导出改成任务式之后这里**依然不能传**：条件会被原样快照进任务，
+ * 而分页累积由后端的 IStudentCsvExportBuilder 负责（每页 1000，
+ * 总量上限是可配置的 Xjgl:Export:MaxRows，超限会在任务提示里说明差多少）。
  */
 function currentQuery() {
   return {
@@ -209,19 +667,12 @@ async function exportStudents(): Promise<void> {
   exporting.value = true
 
   try {
-    const csv = await studentImportApi.export(currentQuery())
-
-    // 导出的文本已带 UTF-8 BOM（否则 Excel 打开是乱码），因此这里按原样写盘
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-
-    link.href = url
-    link.download = `学生名单_${new Date().toISOString().slice(0, 10)}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
-
-    ElMessage.success('已导出当前查询条件下的学生名单')
+    await runExportTask(
+      { kind: 'StudentCsv', studentQuery: currentQuery() },
+      `学生名单_${new Date().toISOString().slice(0, 10)}.csv`
+    )
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
   } finally {
     exporting.value = false
   }
@@ -232,12 +683,15 @@ const importing = ref(false)
 const importColumns = ref<ImportColumn[]>([])
 const importResult = ref<ImportStudentsResult | null>(null)
 const importFileName = ref('')
+/** 上一次导入文件的编码判定结果，回显在导入对话框里（便于"为什么被拒"当场看清）。 */
+const encodingNote = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
 async function openImport(): Promise<void> {
   importVisible.value = true
   importResult.value = null
   importFileName.value = ''
+  encodingNote.value = ''
 
   if (importColumns.value.length === 0) {
     try {
@@ -269,20 +723,35 @@ async function doImport(): Promise<void> {
 
   if (!input?.files?.length) {
     ElMessage.warning('请先选择要导入的 CSV 文件。')
-
     return
   }
 
   const file = input.files[0]
   importFileName.value = file.name
+  encodingNote.value = ''
+  importResult.value = null
   importing.value = true
 
   try {
-    // 浏览器直接读出文本（File.text()），不引任何解析库；
-    // 编码由后端按 UTF-8 处理，模板本身带 BOM，Excel 另存为也不会乱码
-    const content = await file.text()
+    // ⚠ 先按**字节**探测编码（债 10），再决定要不要送去后端。
+    //
+    // 直接用 `file.text()` 是错的：它按 UTF-8 解码，GBK 文件会变成一串替换字符，
+    // 于是后端只回一句「导入文件缺少必需列：姓名、性别…」——
+    // 用户看到的提示与真正原因（编码）毫无关系，会去反复检查列名。
+    // 也不能用 `file.text()` 之后再找替换字符，因为 U+FFFD 是有损的，
+    // 拿不到"第几个字节有问题"这种能指导排查的信息。
+    const probe = probeCsvEncoding(await file.arrayBuffer())
 
-    importResult.value = await studentImportApi.import(content)
+    encodingNote.value = probe.detected
+
+    if (!probe.ok) {
+      // 明确拒绝并给出可执行的做法，而不是把乱码送去后端换回一句莫名其妙的报错
+      ElMessage.error(probe.reason ?? '文件编码不是 UTF-8，无法导入。')
+
+      return
+    }
+
+    importResult.value = await studentImportApi.import(probe.text)
 
     if (importResult.value.failed === 0) {
       ElMessage.success(importResult.value.message)
@@ -322,8 +791,38 @@ onMounted(async () => {
 
         <el-form-item label="学籍状态">
           <el-select v-model="query.studentStatusCode" placeholder="全部" clearable style="width: 140px">
-            <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
+            <el-option
+              v-for="s in statusOptions"
+              :key="s.value"
+              :label="s.label"
+              :value="s.value"
+            />
           </el-select>
+        </el-form-item>
+
+        <!--
+          年级 / 班级：这两个下拉挂在「学校 + 学年」下，因此学校未选时是禁用的
+          （`GradeClassSelect` 内部统一处理这条依赖链，页面不需要自己管）。
+          学年默认取当前学年，可以手改 —— 查往年名单时才需要动它。
+        -->
+        <el-form-item label="学年">
+          <el-input
+            v-model="academicYear"
+            placeholder="如 2025-2026"
+            clearable
+            style="width: 130px"
+          />
+        </el-form-item>
+
+        <el-form-item label="年级">
+          <GradeClassSelect
+            ref="gradeClassSelect"
+            v-model:grade-id="query.gradeId"
+            v-model:class-id="query.classId"
+            :school-org-id="query.schoolOrgId"
+            :academic-year="academicYear"
+            show="both"
+          />
         </el-form-item>
 
         <el-form-item label="关键字">
@@ -378,10 +877,26 @@ onMounted(async () => {
               <AppIcon name="Printer" />
               <span>打印花名册</span>
             </el-button>
-            <el-button v-if="auth.can(MetadataPermissions.Stu.Student.Create)" type="primary">
+            <el-button
+              v-if="auth.can(MetadataPermissions.Stu.Student.Query)"
+              plain
+              @click="changeLogVisible = true"
+            >
+              <AppIcon name="Document" />
+              <span>变更留痕</span>
+            </el-button>
+            <el-button
+              v-if="auth.can(MetadataPermissions.Stu.Student.Create)"
+              type="primary"
+              @click="openCreate"
+            >
               <AppIcon name="Plus" />
               <span>新增学生</span>
             </el-button>
+
+            <!-- 导出/打印改成任务式之后要等后台生成（可能几十秒），
+                 只说"转圈"用户不知道卡在哪一步，所以把真实状态写出来。 -->
+            <span v-if="progressText" class="student-list__progress">{{ progressText }}</span>
           </div>
         </div>
       </template>
@@ -425,9 +940,17 @@ onMounted(async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" align="center" fixed="right">
+        <el-table-column label="操作" width="230" align="center" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openProfile(row)">详情</el-button>
+            <el-button
+              v-if="auth.can(MetadataPermissions.Stu.Student.Update)"
+              link
+              type="primary"
+              @click="openEdit(row)"
+            >
+              修改
+            </el-button>
             <el-button
               v-if="auth.can(MetadataPermissions.Stu.Student.Print)"
               link
@@ -435,6 +958,14 @@ onMounted(async () => {
               @click="printCard(row)"
             >
               学籍卡
+            </el-button>
+            <el-button
+              v-if="auth.can(MetadataPermissions.Stu.Student.Delete)"
+              link
+              type="danger"
+              @click="removeStudent(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -452,6 +983,439 @@ onMounted(async () => {
       />
     </el-card>
 
+    <!-- ---------------- 新增 / 修改学生主档 ---------------- -->
+    <el-dialog
+      v-model="formVisible"
+      :title="formMode === 'create' ? '新增学生' : '修改学生'"
+      width="880px"
+      top="5vh"
+      destroy-on-close
+    >
+      <!--
+        查重提示：后端在写入时也会拒绝，但"填完一整张表单才被告知已有学籍"
+        是最差的交互，所以在这里提前讲清楚。
+      -->
+      <el-alert
+        v-if="duplicateResult"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="student-list__tip"
+        title="疑似重复学籍"
+      >
+        <div v-for="(reason, i) in duplicateResult.reasons" :key="i">· {{ reason }}</div>
+        <div v-for="m in duplicateResult.matched" :key="m.id" class="student-list__muted">
+          已存在：{{ m.name }}（学籍辅号 {{ m.studentNo }}，{{ m.schoolName ?? '未知学校' }}）
+        </div>
+      </el-alert>
+
+      <el-form ref="formRef" :model="form" :rules="formRules" label-width="110px">
+        <el-divider content-position="left">必填</el-divider>
+
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="姓名" prop="name">
+              <el-input v-model="form.name" placeholder="与户口簿一致" @blur="runDuplicateCheck" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="性别" prop="genderCode">
+              <el-select v-model="form.genderCode" placeholder="请选择" style="width: 100%">
+                <el-option
+                  v-for="s in genderCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="出生日期" prop="birthDate">
+              <el-date-picker
+                v-model="form.birthDate"
+                type="date"
+                value-format="YYYY-MM-DD"
+                placeholder="选择日期"
+                style="width: 100%"
+                @change="runDuplicateCheck"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="身份证件类型" prop="idCardTypeCode">
+              <el-select v-model="form.idCardTypeCode" placeholder="请选择" style="width: 100%">
+                <el-option
+                  v-for="s in idTypeCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="身份证件号码" prop="idCardNumber">
+          <el-input
+            v-model="form.idCardNumber"
+            placeholder="必须重新输入（身份证加密存储，界面不回显明文）"
+            @blur="runDuplicateCheck"
+          />
+          <div v-if="formMode === 'edit' && editingMaskedIdCard" class="student-list__muted">
+            当前库中：{{ editingMaskedIdCard }} —— 加密存储无法回显，保存时请确认这一栏填的是同一个人
+          </div>
+          <div v-if="duplicateChecking" class="student-list__muted">正在查重…</div>
+        </el-form-item>
+
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="学校" prop="schoolOrgId">
+              <SchoolSelect
+                v-model="form.schoolOrgId"
+                :schools="schools"
+                placeholder="请选择学校"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="学年" prop="academicYear">
+              <el-input v-model="form.academicYear" placeholder="如 2025-2026" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="年级 / 班级">
+              <GradeClassSelect
+                v-model:grade-id="form.gradeId"
+                v-model:class-id="form.classId"
+                :school-org-id="form.schoolOrgId"
+                :academic-year="form.academicYear"
+                show="both"
+                grade-width="140px"
+                class-width="140px"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="学籍状态">
+              <el-select
+                v-model="form.studentStatusCode"
+                placeholder="默认在读"
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in statusOptions"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-divider content-position="left">基本信息</el-divider>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="曾用名">
+              <el-input v-model="form.formerName" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="班内学号">
+              <el-input v-model="form.classStudentNo" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="民族">
+              <el-select v-model="form.nationCode" clearable placeholder="请选择" style="width: 100%">
+                <el-option
+                  v-for="s in nationCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="国家 / 地区">
+              <el-select v-model="form.countryCode" clearable placeholder="请选择" style="width: 100%">
+                <el-option
+                  v-for="s in countryCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="政治面貌">
+              <el-select
+                v-model="form.politicalCode"
+                clearable
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in politicalCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="户口性质">
+              <el-select
+                v-model="form.householdNatureCode"
+                clearable
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in householdCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="籍贯">
+              <el-input v-model="form.nativePlace" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="出生地">
+              <el-input v-model="form.birthPlace" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="入学日期">
+              <el-date-picker
+                v-model="form.enrollDate"
+                type="date"
+                value-format="YYYY-MM-DD"
+                placeholder="选择日期"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="入学方式">
+              <el-select
+                v-model="form.enrollTypeCode"
+                clearable
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in enrollTypeCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="就读方式">
+              <el-select
+                v-model="form.studyModeCode"
+                clearable
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in studyModeCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="学制">
+              <el-select
+                v-model="form.schoolLengthCode"
+                clearable
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in schoolLengthCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-divider content-position="left">联系方式与住址</el-divider>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="联系电话">
+              <el-input v-model="form.phoneNumber" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="邮政编码">
+              <el-input v-model="form.postalCode" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="电子邮箱">
+              <el-input v-model="form.email" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="户口所在地">
+          <el-input v-model="form.householdAddress" />
+        </el-form-item>
+        <el-form-item label="家庭住址">
+          <el-input v-model="form.homeAddress" />
+        </el-form-item>
+        <el-form-item label="现居住址">
+          <el-input v-model="form.currentAddress" />
+        </el-form-item>
+
+        <el-divider content-position="left">特殊情况</el-divider>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="随迁子女">
+              <el-switch v-model="form.isMigrantChild" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="随迁类型">
+              <el-select
+                v-model="form.migrantTypeCode"
+                clearable
+                :disabled="!form.isMigrantChild"
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in migrantCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="留守儿童">
+              <el-switch v-model="form.isLeftBehindChild" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="留守类型">
+              <el-select
+                v-model="form.leftBehindTypeCode"
+                clearable
+                :disabled="!form.isLeftBehindChild"
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in leftBehindCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="家庭经济困难">
+              <el-switch v-model="form.isPoor" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="残疾">
+              <el-switch v-model="form.isDisabled" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="残疾类型">
+              <el-select
+                v-model="form.disabilityCode"
+                clearable
+                :disabled="!form.isDisabled"
+                placeholder="请选择"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="s in disabilityCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="健康状况">
+              <el-select v-model="form.healthCode" clearable placeholder="请选择" style="width: 100%">
+                <el-option
+                  v-for="s in healthCodes.options.value"
+                  :key="s.value"
+                  :label="s.label"
+                  :value="s.value"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="备注">
+          <el-input v-model="form.remark" type="textarea" :rows="2" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="formVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitForm">
+          {{ formMode === 'create' ? '建档' : '保存' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- ---------------- 批量导入 ---------------- -->
     <el-dialog v-model="importVisible" title="批量导入学生" width="820px" top="6vh">
       <el-alert
@@ -460,6 +1424,19 @@ onMounted(async () => {
         show-icon
         class="student-list__tip"
         title="导入与手工录入走完全相同的校验（身份证校验位、跨校查重、生僻字姓名、学籍号生成、数据范围），逐行容错：个别行出错不影响其它行。"
+      />
+
+      <!--
+        编码提示必须写在界面上、而不是只在失败时弹一次消息：
+        "Excel 另存为 CSV 默认是 GBK" 是本功能唯一的高频失败原因，
+        用户第一次就会被挡下，之后每次回来都应该看得见怎么另存。
+      -->
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        class="student-list__tip"
+        title="文件必须是 UTF-8 编码。Excel 的「另存为 CSV」默认用本机编码（简体中文为 GBK），中文会变成乱码并被拒绝 —— 请选择「CSV UTF-8（逗号分隔）」。"
       />
 
       <el-space wrap class="student-list__import-actions">
@@ -474,6 +1451,10 @@ onMounted(async () => {
         </el-button>
 
         <span v-if="importFileName" class="student-list__filename">{{ importFileName }}</span>
+
+        <el-tag v-if="encodingNote" size="small" effect="plain">
+          编码：{{ encodingNote }}
+        </el-tag>
 
         <input ref="fileInput" type="file" accept=".csv,text/csv" hidden @change="doImport" />
       </el-space>
@@ -523,6 +1504,9 @@ onMounted(async () => {
 
     <!-- 学生档案（监护人 / 简历 / 奖励 / 处分 / 资助 / 体检） -->
     <StudentProfileDrawer v-model="profileVisible" :student="profileStudent" @changed="load" />
+
+    <!-- 全局变更留痕（按动作 / 时间 / 学生关键字查，受数据范围约束） -->
+    <StudentChangeLogDialog v-model="changeLogVisible" />
   </div>
 </template>
 
@@ -547,6 +1531,15 @@ onMounted(async () => {
 
 .student-list__rare {
   transform: scale(0.9);
+}
+
+/* 导出/打印任务的进行状态（排队中 / 正在生成） */
+.student-list__progress {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  vertical-align: middle;
 }
 
 .student-list__pager {

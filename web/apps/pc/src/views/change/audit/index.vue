@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { changeFlowApi, changeTypeApi } from '@/api'
-import type { ChangeApplyListItem, ChangeType } from '@/api/types'
+import {
+  changeFlowApi,
+  changeTypeApi,
+  describeTruncation,
+  exportTaskApi,
+  saveBlob
+} from '@/api'
+import type { ChangeApplyListItem, ChangeType, ExportTask } from '@/api/types'
+import { ChangeApplyStatuses, ExportTaskKinds } from '@/api/types'
 import ChangeApplyDetail from '@/components/ChangeApplyDetail.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import { CodeCategories, useCodeOptions } from '@/composables/useCodeOptions'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 
@@ -24,6 +32,7 @@ const auth = useAuthStore()
 const canApprove = computed(() => auth.can(MetadataPermissions.Chg.Audit.Approve))
 const canRevoke = computed(() => auth.can(MetadataPermissions.Chg.Audit.RevokeApprove))
 const canQuery = computed(() => auth.can(MetadataPermissions.Chg.Audit.Query))
+const canExport = computed(() => auth.can(MetadataPermissions.Chg.Audit.Export))
 
 const activeTab = ref(canQuery.value ? 'todo' : 'todo')
 
@@ -71,13 +80,15 @@ const allQuery = reactive({
   maxResultCount: 20
 })
 
-const statusOptions = [
-  { value: 'Submitted', label: '待审核' },
-  { value: 'InProgress', label: '审核中' },
-  { value: 'Approved', label: '已通过' },
-  { value: 'Rejected', label: '已驳回' },
-  { value: 'Withdrawn', label: '已撤回' }
-]
+/**
+ * 申请状态下拉项**来自码表**（CHANGE_APPLY_STATUS），不在前端硬编码。
+ *
+ * 这里原来写的是 5 条手写字面量，漏掉了「草稿」与「已归档」——
+ * 而码表里有 7 条。手写清单与码表**必然会漂移**，而漏项的后果是
+ * "这个状态永远筛不出来"，看起来像后端没数据。现在统一走 useCodeOptions，
+ * 后端加了新状态前端自动就有（与"学籍状态过滤"那次是同一类缺陷，见债 12）。
+ */
+const statusCodes = useCodeOptions(CodeCategories.ChangeApplyStatus)
 
 async function loadAll(): Promise<void> {
   allLoading.value = true
@@ -198,24 +209,104 @@ function openDetail(row: ChangeApplyListItem): void {
 
 function statusTagType(status: string): 'success' | 'danger' | 'warning' | 'info' {
   switch (status) {
-    case 'Approved':
+    case ChangeApplyStatuses.Approved:
       return 'success'
-    case 'Rejected':
+    case ChangeApplyStatuses.Rejected:
       return 'danger'
-    case 'Submitted':
-    case 'InProgress':
+    case ChangeApplyStatuses.Submitted:
+    case ChangeApplyStatuses.InProgress:
       return 'warning'
     default:
       return 'info'
   }
 }
 
-onMounted(async () => {
+// ---------------------------------------------------------------------------
+// 导出审核流水
+// ---------------------------------------------------------------------------
+
+/**
+ * 导出**审核流水台账**（一个审批节点一行），不是申请单清单。
+ *
+ * 两份产物分开是有意的：一份申请在流水里是多行（可能有驳回重提、多级审核），
+ * 所以"清单"与"台账"的行数对不上是正常的；复核与纪检要的是后者
+ * （谁、什么时候、批了什么意见）。清单那份在申请页，权限也分开。
+ *
+ * 筛选条件沿用「全部申请」页签的当前条件 —— 台账通常就是"把这个范围的流水打出来"。
+ */
+const exporting = ref(false)
+const progressText = ref('')
+
+/**
+ * 页面卸载后停止轮询（否则切走之后定时器还会每 1.5 秒打到超时）。
+ */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+})
+
+async function exportAuditTrail(): Promise<void> {
+  exporting.value = true
+  progressText.value = '排队中…'
+
   try {
-    types.value = await changeTypeApi.getTypes(false)
-  } catch {
-    types.value = []
+    const task = await exportTaskApi.run(
+      {
+        kind: ExportTaskKinds.ChangeAuditCsv,
+        // 刻意**不带分页参数**：条件被快照进任务，分页累积由后端按 Xjgl:Export:MaxRows 收口
+        changeQuery: {
+          changeTypeId: allQuery.changeTypeId,
+          status: allQuery.status,
+          keyword: allQuery.keyword || undefined,
+          sorting: 'ApplyDate DESC'
+        }
+      },
+      {
+        shouldStop: () => disposed,
+        onProgress: (t: ExportTask) => {
+          progressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+        }
+      }
+    )
+
+    const blob = await exportTaskApi.download(task.id)
+
+    // 文件名以**后端给的**为准（带了日期等有用信息），后端没给才用兜底名
+    saveBlob(blob, task.fileName || `异动审核流水_${new Date().toISOString().slice(0, 10)}.csv`)
+
+    // 截断必须显式提示：流水没有天然上限，后端按 MaxRows 截，
+    // 少了几行却只弹"成功"，复核时"某个节点没审批记录"就会变成冤案。
+    const truncation = describeTruncation(task)
+
+    if (truncation) {
+      ElMessage.warning(truncation)
+    } else {
+      ElMessage.success(
+        task.message ? `${task.kindName}已完成：${task.message}` : `${task.kindName}已完成`
+      )
+    }
+  } catch (e) {
+    // 与微代码 / 异动申请导出同一处理：HTTP 失败已被拦截器弹过（带后端 reason），
+    // 只有 `exportTaskApi.run` 抛的业务错误（任务 Failed / 被取消 / 等超时）
+    // 不经过拦截器 —— 不提示就等于"点了导出、转圈停下、什么都没发生"。
+    if (!(e as { isAxiosError?: boolean })?.isAxiosError) {
+      ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
+    }
+  } finally {
+    // 无论成功、失败还是超时都要清掉，否则那行提示会一直留在页面上
+    exporting.value = false
+    progressText.value = ''
   }
+}
+
+onMounted(async () => {
+  // 码表与异动类型并行拉取（互不依赖，串行白等一个往返）
+  const [, typeList] = await Promise.all([
+    statusCodes.load(),
+    changeTypeApi.getTypes(false).catch(() => [] as ChangeType[])
+  ])
+
+  types.value = typeList
 
   await loadTodo()
 })
@@ -309,7 +400,12 @@ onMounted(async () => {
               <el-option v-for="t in types" :key="t.id" :label="t.name" :value="t.id" />
             </el-select>
             <el-select v-model="allQuery.status" placeholder="全部状态" clearable style="width: 130px">
-              <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
+              <el-option
+                v-for="s in statusCodes.options.value"
+                :key="s.value"
+                :label="s.label"
+                :value="s.value"
+              />
             </el-select>
             <el-input
               v-model="allQuery.keyword"
@@ -319,6 +415,20 @@ onMounted(async () => {
               @keyup.enter="searchAll"
             />
             <el-button type="primary" @click="searchAll">查询</el-button>
+
+            <el-button
+              v-if="canExport"
+              plain
+              :loading="exporting"
+              @click="exportAuditTrail"
+            >
+              <AppIcon name="Download" />
+              <span>导出审核流水</span>
+            </el-button>
+
+            <!-- 导出改成任务式之后要等后台生成（可能几十秒），
+                 只说"转圈"用户不知道卡在哪一步，所以把真实状态写出来。 -->
+            <span v-if="progressText" class="chg-audit__muted">{{ progressText }}</span>
           </div>
 
           <el-table v-loading="allLoading" :data="allRows" border stripe height="calc(100vh - 400px)">
@@ -346,7 +456,11 @@ onMounted(async () => {
               <template #default="{ row }">
                 <el-button link type="primary" @click="openDetail(row)">详情</el-button>
                 <el-button
-                  v-if="canRevoke && row.status !== 'Approved' && row.status !== 'Rejected'"
+                  v-if="
+                    canRevoke &&
+                    row.status !== ChangeApplyStatuses.Approved &&
+                    row.status !== ChangeApplyStatuses.Rejected
+                  "
                   link
                   type="warning"
                   @click="revoke(row)"

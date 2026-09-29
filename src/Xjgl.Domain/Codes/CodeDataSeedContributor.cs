@@ -309,10 +309,19 @@ public class CodeDataSeedContributor : IDataSeedContributor, ITransientDependenc
             ("Import", "导入"),
             ("Export", "导出"),
             ("Print", "打印"),
+            ("Assign", "分配权限"),
             ("Approve", "审核"),
             ("RevokeApprove", "撤销审核"),
             ("Upload", "上传"),
+            ("Compensate", "存储补偿"),
             ("Download", "下载")
+
+            // 【Assign 与 Compensate 是后补的】
+            // 元数据种子里的模块操作一直在用这两个类型（`Sys.Permission.Assign`、
+            // `Pho.Photo.Compensate`），但码表里没有它们 —— 而前端"操作类型"下拉
+            // 曾经是**手写**的一份列表，恰好把这两个写进去了、又漏了 Download。
+            // 两边各自漂移、谁也不报错，正是"手写码值"这类缺陷的典型形态。
+            // 现在前端改成从这张码表取，所以码表必须是**超集**。
         }, isSystem: true);
 
         await AddAsync("APPROVE_LEVEL", "审核级别码", "系统内置", 430, new[]

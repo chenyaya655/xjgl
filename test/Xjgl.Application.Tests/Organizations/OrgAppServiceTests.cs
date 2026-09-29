@@ -125,6 +125,103 @@ public class OrgAppServiceTests : XjglIntegrationTestBase
             await _orgAppService.MoveAsync(province.Id, new MoveOrgDto { NewParentId = city.Id }));
     }
 
+    /// <summary>
+    /// 跨层级移动必须被拒绝（四级树是省 → 市 → 县 → 校）。
+    ///
+    /// 这条守的是一个**静默算错**的缺口：`MoveAsync` 以前只挡"移到自己下面/自己子树"，
+    /// 不管层级 —— 于是"把学校挂到省厅下"会成功，而物化路径、`TreeLevel`、
+    /// 数据范围（按层级推导）与审核级别截断都会跟着错，且**没有任何报错**。
+    /// </summary>
+    [Fact]
+    public async Task 跨层级移动被拒绝_把学校挂到省厅下()
+    {
+        var province = await CreateAsync(OrgTypes.Province, "己省");
+        var city = await CreateAsync(OrgTypes.City, "己市", province.Id);
+        var county = await CreateAsync(OrgTypes.County, "己县", city.Id);
+        var school = await CreateAsync(OrgTypes.School, "己小学", county.Id);
+
+        var ex = await Should.ThrowAsync<BusinessException>(async () =>
+            await _orgAppService.MoveAsync(school.Id, new MoveOrgDto { NewParentId = province.Id }));
+
+        ex.Code.ShouldBe(XjglDomainErrorCodes.OrgHierarchyInvalid);
+
+        // 被拒绝之后原地不动（不能出现"报错了但父节点已经改了"）
+        var unchanged = await _orgAppService.GetAsync(school.Id);
+        unchanged.ParentId.ShouldBe(county.Id);
+        unchanged.TreeLevel.ShouldBe(4);
+    }
+
+    /// <summary>
+    /// 省厅只能是根节点，不能被挂到别的节点下。
+    ///
+    /// 注意这里用的是**两个不同的省**：换成"把省挂到自己的市下面"会先撞上
+    /// 「不能移动到自己的下级」，那条错误信息更贴切，但也测不到这条规则。
+    /// </summary>
+    [Fact]
+    public async Task 省厅不能挂到别的节点下()
+    {
+        var provinceA = await CreateAsync(OrgTypes.Province, "庚省甲");
+        var provinceB = await CreateAsync(OrgTypes.Province, "庚省乙");
+
+        var ex = await Should.ThrowAsync<BusinessException>(async () =>
+            await _orgAppService.MoveAsync(provinceA.Id, new MoveOrgDto { NewParentId = provinceB.Id }));
+
+        ex.Code.ShouldBe(XjglDomainErrorCodes.OrgHierarchyInvalid);
+
+        var unchanged = await _orgAppService.GetAsync(provinceA.Id);
+        unchanged.ParentId.ShouldBeNull();
+        unchanged.TreeLevel.ShouldBe(1);
+    }
+
+    /// <summary>
+    /// 新增时也不能跳级挂靠：把学校直接建在省厅下必须被拒绝。
+    ///
+    /// 与"移动"共用同一条规则（`OrgAppService.EnsureHierarchy`）——
+    /// 移动挡、新增不挡的话，绕一下就能造出同样非法的一棵树。
+    /// </summary>
+    [Fact]
+    public async Task 新增学校时父节点不是县区_被拒绝()
+    {
+        var province = await CreateAsync(OrgTypes.Province, "辛省");
+        var city = await CreateAsync(OrgTypes.City, "辛市", province.Id);
+
+        var ex = await Should.ThrowAsync<BusinessException>(async () =>
+            await CreateAsync(OrgTypes.School, "辛小学", province.Id));
+
+        ex.Code.ShouldBe(XjglDomainErrorCodes.OrgHierarchyInvalid);
+
+        // 挂到市局下同样不行（必须是县区）
+        var ex2 = await Should.ThrowAsync<BusinessException>(async () =>
+            await CreateAsync(OrgTypes.School, "辛小学二", city.Id));
+
+        ex2.Code.ShouldBe(XjglDomainErrorCodes.OrgHierarchyInvalid);
+
+        // 建在县区下才是合法的
+        var county = await CreateAsync(OrgTypes.County, "辛县", city.Id);
+        var school = await CreateAsync(OrgTypes.School, "辛小学三", county.Id);
+
+        school.TreeLevel.ShouldBe(4);
+        school.PathCode.ShouldBe($"{province.Code}.{city.Code}.{county.Code}.{school.Code}");
+    }
+
+    /// <summary>
+    /// **刻意保留的宽松**：不指定父节点时，任意类型都可以作为根节点。
+    ///
+    /// 这不是漏洞：界面上"新增下级"会按当前节点自动推断类型（省→市→县→校），
+    /// 用户没有机会凭空建一所"没有上级的学校"；而导入与测试会直接造单点数据。
+    /// 把它当错误挡掉，只会逼出一堆纯为满足校验的脚手架数据。
+    /// 这条用例的作用是**把这个决定固定下来** —— 免得以后有人"顺手"改成必须给父节点。
+    /// </summary>
+    [Fact]
+    public async Task 不指定父节点时允许作为根节点()
+    {
+        var school = await CreateAsync(OrgTypes.School, "无上级学校");
+
+        school.ParentId.ShouldBeNull();
+        school.TreeLevel.ShouldBe(1);
+        school.PathCode.ShouldBe(school.Code);
+    }
+
     [Fact]
     public async Task 不能把节点挂到自己下面()
     {

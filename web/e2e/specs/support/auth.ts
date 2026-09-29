@@ -66,6 +66,44 @@ export function newIdCard(): string {
   return first17 + codes[sum % 11]
 }
 
+/**
+ * 把数字转成**中文数字**，用于造"每轮都不同、但只含规范汉字"的测试姓名。
+ *
+ * 【为什么需要它】后端对姓名做规范汉字校验（不能含数字/字母/符号），
+ * 所以 `缺照片测试生${Date.now()}` 这种常规的"加时间戳保唯一"写法会被直接拒收。
+ * 而有些用例**必须**每轮都拿到一个新学生（例如"缺照片名单"必须是没有照片的学生；
+ * 造过的学生上一轮已经传了照片，复用就永远查不到）。
+ * 把时间戳映射成中文数字，既保证唯一、又过得了校验。
+ */
+export function chineseNumeral(value: number): string {
+  const digits = '零一二三四五六七八九'
+  const units = ['', '十', '百', '千', '万', '十万', '百万', '千万']
+
+  const text = String(value)
+  let result = ''
+
+  for (let i = 0; i < text.length; i += 1) {
+    const digit = Number(text[i])
+    const unit = units[text.length - 1 - i] ?? ''
+
+    if (digit !== 0) {
+      // 中文习惯："一十五"读作"十五"
+      const prefix = digit === 1 && unit === '十' && i === 0 ? '' : digits[digit]
+
+      result += prefix + unit
+    } else if (result.length > 0 && !result.endsWith('零')) {
+      result += '零'
+    }
+  }
+
+  return result.replace(/零+$/, '') || '零'
+}
+
+/** 取一个"每轮都不同"的 6 位序号（用于拼中文姓名）。 */
+export function uniqueSuffix(): string {
+  return chineseNumeral(Number(String(Date.now()).slice(-6)))
+}
+
 export interface SeededStudent {
   id: string
   studentNo: string
@@ -73,16 +111,22 @@ export interface SeededStudent {
 }
 
 /**
- * 通过接口建一名学生并返回其信息。
+ * 通过接口建一名学生并返回其信息；**同名同校已有则复用**。
  *
  * 为什么用接口造数据而不是点界面：学生列表页的「新增学生」按钮目前还没有接对话框
- * （建档走"导入"或接口）。E2E 用例的重点是**界面能走通的部分**：
- * 列表、详情抽屉、子表、变更记录、打印。数据准备走接口是刻意的。
+ * （建档走"导入"或接口）。
  *
  * ⚠ 姓名只能用中文：后端会校验姓名（不能含数字/字母/符号）。
  * 第一版用例我用了 `E2E学生123456` 这种"带时间戳"的名字，直接被拒：
  *   「姓名包含非法字符"2"」—— 提示很清楚，是我造数据的方式错了。
- * 唯一性因此不靠姓名，而靠**系统生成的学籍辅号**（用例按辅号检索）。
+ *
+ * 【为什么要"先找后建"而不是每次新建】
+ * 测试库是**长期累积**的，而用例的定位方式是"按姓名/辅号找到那一行"。
+ * 每跑一次就多一个同名学生，第二次之后 `locator('.el-table__row', { hasText: 姓名 })`
+ * 就会命中多行，Playwright 的 strict mode 直接报
+ * "resolved to 2/7 elements" —— 用例因此变成**只能跑一次**。
+ * （实测踩过：第一次全量跑绿，第二次起 02-student 的 3 条全红。）
+ * 所以先按姓名+学年查一次，命中就复用；这也是 CI（干净库）与本机行为一致的前提。
  */
 export async function seedStudent(
   request: APIRequestContext,
@@ -90,6 +134,20 @@ export async function seedStudent(
   schoolOrgId: string,
   name: string
 ): Promise<SeededStudent> {
+  const existing = await request.get('/api/app/student', {
+    headers: { Authorization: `Bearer ${token}` },
+    params: { schoolOrgId, keyword: name, maxResultCount: 50 }
+  })
+
+  if (existing.ok()) {
+    const page = (await existing.json()) as { items?: { id: string; studentNo: string; name: string }[] }
+    const hit = page.items?.find((s) => s.name === name)
+
+    if (hit) {
+      return { id: hit.id, studentNo: hit.studentNo, name: hit.name }
+    }
+  }
+
   const response = await request.post('/api/app/student', {
     headers: { Authorization: `Bearer ${token}` },
     data: {

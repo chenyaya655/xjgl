@@ -99,6 +99,18 @@ public class MenuItemDto
     public string? Icon { get; set; }
     public bool IsExternal { get; set; }
 
+    /// <summary>
+    /// 是否在左侧菜单里隐藏（模块本身仍然可用）。
+    ///
+    /// 【为什么"隐藏"不等于"不下发"】
+    /// 前端注册动态路由用的就是这份菜单列表（<c>registerDynamicRoutes</c>）。
+    /// 如果后端直接把隐藏模块从列表里删掉，路由也跟着消失 ——
+    /// 隐藏就从"不进菜单但能按 URL 打开"变成了"彻底打不开"，
+    /// 而"模块管理"里那个复选框本意是前者。
+    /// 所以照样下发，由前端渲染菜单时跳过（<c>MainLayout.vue</c>）。
+    /// </summary>
+    public bool IsHidden { get; set; }
+
     /// <summary>该模块下当前用户拥有的操作权限码。</summary>
     public List<string> Actions { get; set; } = new();
 }

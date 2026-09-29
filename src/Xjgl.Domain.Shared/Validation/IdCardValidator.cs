@@ -101,6 +101,25 @@ public static class IdCardValidator
     }
 
     /// <summary>
+    /// 身份证摘要密钥的配置键。
+    ///
+    /// 放在这里而不是各调用方：业务侧（<c>IdCardProtector</c>）与 DbMigrator 的演示种子
+    /// **必须读同一个键**。两边各写一份字面量时，改了一处、另一处就会读不到密钥而
+    /// 悄悄走回退值 —— 结果是同一张身份证在两边算出**不同的摘要**，
+    /// 查重与秒传同时失效，且**不会有任何报错**。
+    /// </summary>
+    public const string HmacKeyConfigKey = "Xjgl:Security:IdCardHmacKey";
+
+    /// <summary>
+    /// 未配置密钥时使用的开发回退值。
+    ///
+    /// ⚠ 全仓库**只有这一处定义**。理由同上：摘要必须两边一致，而"一致"这件事
+    ///   靠注释提醒是保不住的，只有共享同一个常量才行。
+    ///   生产环境必须显式配置 <see cref="HmacKeyConfigKey"/>，否则所有人用同一个公开密钥。
+    /// </summary>
+    public const string DevFallbackHmacKey = "xjgl-dev-idcard-hmac-key-please-change-in-production";
+
+    /// <summary>
     /// 生成用于唯一索引与查重的哈希键。
     /// 身份证号本身以加密方式存储，查询用这个 HMAC 值。
     /// </summary>

@@ -25,6 +25,13 @@ public class ChangeTypeDto : EntityDto<Guid>
     public bool AllowCrossAcademicYear { get; set; }
     public int MaxApplyTimesPerYear { get; set; }
     public string? GradeScope { get; set; }
+
+    /// <summary>
+    /// 是否必须上传证明材料。
+    ///
+    /// 校验点在**批准前**（第一次批准），不是提交时——理由见
+    /// <c>StuChangeType.RequireAttachment</c> 的说明。
+    /// </summary>
     public bool RequireAttachment { get; set; }
 
     public Guid? FlowTemplateId { get; set; }
@@ -84,6 +91,8 @@ public class CreateUpdateChangeTypeDto
     [StringLength(256)]
     public string? GradeScope { get; set; }
 
+    // 是否必须上传证明材料：配置入口在这里，真正的拦截在第一次批准时
+    // （见 StuChangeType.RequireAttachment 的说明）。
     public bool RequireAttachment { get; set; }
 
     public int Sort { get; set; }
@@ -104,7 +113,6 @@ public class ChangeFlowNodeDto : EntityDto<Guid>
     public string RoleCode { get; set; } = default!;
     public string MergeStrategy { get; set; } = default!;
     public bool AllowReject { get; set; }
-    public bool AllowDelegate { get; set; }
     public int TimeoutDays { get; set; }
     public bool IsEnabled { get; set; }
     public string? Remark { get; set; }
@@ -131,8 +139,17 @@ public class CreateUpdateFlowNodeDto
     [StringLength(32)]
     public string MergeStrategy { get; set; } = ChangeMergeStrategies.MergeToLast;
 
+    /// <summary>
+    /// 该节点是否允许驳回（默认允许）。
+    ///
+    /// 关闭后，审核人在这个节点只能「通过」，驳回会被后端拒绝（`Xjgl:00608`）。
+    /// 适用场景：只负责登记备案、不做出实质判断的节点。
+    ///
+    /// 注意：这里曾有一个 `AllowDelegate`（允许委托他人审核），
+    /// 它既没有配置入口、也没有任何代码读它，而**权限委派功能本身尚未实现** ——
+    /// 已随本轮清理删除。要实现委派时再加回来（见 ROADMAP「权限委派」）。
+    /// </summary>
     public bool AllowReject { get; set; } = true;
-    public bool AllowDelegate { get; set; }
 
     [Range(0, 365)]
     public int TimeoutDays { get; set; }

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { changeFlowApi, MetadataPermissions } from '@xjgl/api'
+import { changeFlowApi, ChangeTaskStatuses, MetadataPermissions } from '@xjgl/api'
 import type { ChangeApply, ChangeApplyListItem } from '@xjgl/api'
 import { useAuthStore } from '@/stores/auth'
 
@@ -260,7 +260,10 @@ onMounted(() => {
           </el-descriptions>
 
           <h3 class="todo__section">审核流程</h3>
-          <el-steps direction="vertical" :active="detail.tasks.findIndex((t) => t.status === 'Pending')">
+          <el-steps
+            direction="vertical"
+            :active="detail.tasks.findIndex((t) => t.status === ChangeTaskStatuses.Pending)"
+          >
             <el-step v-for="task in detail.tasks" :key="task.id" :title="`第 ${task.seq} 步 · ${task.nodeName}`">
               <template #description>
                 <div class="todo__step">

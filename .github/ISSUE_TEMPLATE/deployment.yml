@@ -1,0 +1,80 @@
+name: 部署 / 环境问题
+description: 按 README 或 deploy/README 部署时不成功
+title: "[Deploy] "
+labels: ["deployment"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **部署问题几乎全是环境差异**，所以下面的环境信息比"报错原文"还重要。
+        请尽量填全 —— 少了这些信息，维护者只能反问你，一来一回要多花一整天。
+
+        另外先确认这两件事（都踩过）：
+        1. `.NET SDK 必须是 10.0`（`dotnet --version` 确认）；
+        2. **改了元数据种子后要重跑 `DbMigrator`**，否则新模块的权限在库里不存在。
+
+  - type: dropdown
+    id: scenario
+    attributes:
+      label: 你在哪种场景下部署
+      options:
+        - 本地开发（docker-compose.dev.yml）
+        - 生产（docker-compose.prod.yml）
+        - Kubernetes（清单在 deploy/ 下）
+        - 不用 Docker，直接 dotnet run
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 卡在哪一步
+      options:
+        - 起基础设施（PostgreSQL / Redis / RabbitMQ）
+        - 初始化数据库（DbMigrator 迁移 + 种子）
+        - 启动后端（HttpApi.Host）
+        - 启动前端（Vite）
+        - 反向代理 / HTTPS
+        - PDF 打印（中文字体）
+        - 照片存储（NAS 挂载）
+        - 其它
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: 报错原文
+      description: |
+        完整贴出（代码块）。**不要只贴最后一行** ——
+        前面几行往往才是根因（例如"内容根找不到 appsettings.json"）。
+        ⚠️ 请脱敏连接串口令。
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      value: |
+        - 操作系统与版本：
+        - Docker 版本 / `docker compose version`：
+        - .NET SDK（`dotnet --version`）：
+        - Node（`node -v`）与 pnpm 方式（corepack / 全局安装）：
+        - 数据库是容器还是本机？版本？（`SELECT version();`）
+        - 是否装中文字体？哪个（`fc-list :lang=zh`）：
+        - 部署机的网络情况（能否访问 nuget.org / npm registry；是否走代理）：
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: 已经试过什么
+      options:
+        - label: 确认过 .NET SDK 是 10.0
+        - label: 重跑过 DbMigrator
+        - label: 清空过数据卷（`docker compose down -v`）重来
+        - label: 看过后端启动日志里的 WARNING（例如"分布式缓存主实现不可用"）
+        - label: 查过 deploy/README.md 的对应章节

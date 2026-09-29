@@ -33,6 +33,7 @@
     "Xjgl:00002": "The record already exists",
     "Xjgl:00003": "The record is in use and cannot be deleted",
     "Xjgl:00004": "Validation failed",
+    "Xjgl:00005": "Too many requests, please try again later",
 
     "Xjgl:00100": "Organization not found",
     "Xjgl:00101": "This organization still has child organizations. Delete the children first.",

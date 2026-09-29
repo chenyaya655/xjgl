@@ -11,6 +11,9 @@
     "./types": "./src/types.ts",
     "./http": "./src/http.ts"
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
   "dependencies": {
     "axios": "^1.20.0",
     "element-plus": "^2.14.5"

@@ -1,5 +1,6 @@
 using Shouldly;
 using Volo.Abp;
+using Xjgl.Data;
 using Xjgl.Organizations;
 using Xjgl.Students;
 using Xunit;
@@ -207,6 +208,106 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
     }
 
     // ==================================================================
+    // 债 1：多步写的事务原子性
+    //
+    // 【用什么表做验证】`stu_guardian`：它的必填列只有 (student_id, seq, name)，
+    // 可以直接构造入库。为什么不用 `sys_org`：它还有一个**必须由服务层计算的**
+    // `path_code`（物化路径），直接构造入库会撞 NOT NULL —— 用例会红在
+    // "插入失败"上，而不是红在事务语义上，等于没测到要测的东西。
+    // ==================================================================
+
+    /// <summary>造一条守卫者记录（只依赖必填列，便于做事务验证）。</summary>
+    private static StuGuardian NewGuardian(string name)
+        => new(Guid.NewGuid(), Guid.NewGuid(), 1, name);
+
+    [Fact]
+    public async Task 事务范围_中途抛异常时前面的写全部回滚()
+    {
+        // 【为什么这条用例是债 1 的验收标准】
+        // "包了事务"这件事本身无法从代码看出来 —— 必须证明**回滚真的生效**：
+        // 前半段成功写入的数据，在异常之后**必须查不到**。
+        // 只断言"没抛异常/正常提交"是不合格的：那连没包事务的实现也能通过。
+        var tx = GetRequiredService<IXjglTransactionScope>();
+        var guardians = GetRequiredService<IXjglRepository<StuGuardian>>();
+
+        var marker = "事务回滚测试" + Guid.NewGuid().ToString("N")[..8];
+
+        (await guardians.GetCountAsync(g => g.Name == marker))
+            .ShouldBe(0, "标记名应当是本轮新造的，起点必须为 0");
+
+        await Should.ThrowAsync<InvalidOperationException>(async () =>
+        {
+            await tx.ExecuteAsync(async () =>
+            {
+                // 前半段：真的写库（不是内存里的对象）
+                await guardians.InsertAsync(NewGuardian(marker), autoSave: true);
+
+                // 确认这一条**确实已经写进库了** —— 否则下面的"回滚后查不到"
+                // 无法区分"被回滚了"与"压根没写进去"
+                (await guardians.GetCountAsync(g => g.Name == marker))
+                    .ShouldBe(1, "事务内应当能查到自己刚写入的数据");
+
+                // 后半段：失败
+                throw new InvalidOperationException("故意失败，用来验证回滚");
+            });
+        });
+
+        (await guardians.GetCountAsync(g => g.Name == marker))
+            .ShouldBe(0, "事务回滚后，前半段写入的数据必须查不到 —— 否则事务等于没包");
+    }
+
+    [Fact]
+    public async Task 事务范围_正常结束时数据确实落库()
+    {
+        // 反向用例：只有"异常回滚"一条会让"永远不提交"的实现也通过。
+        var tx = GetRequiredService<IXjglTransactionScope>();
+        var guardians = GetRequiredService<IXjglRepository<StuGuardian>>();
+
+        var marker = "事务提交测试" + Guid.NewGuid().ToString("N")[..8];
+
+        await tx.ExecuteAsync(async () =>
+        {
+            await guardians.InsertAsync(NewGuardian(marker), autoSave: true);
+        });
+
+        (await guardians.GetCountAsync(g => g.Name == marker))
+            .ShouldBe(1, "事务正常结束后数据必须真的落库");
+    }
+
+    [Fact]
+    public async Task 事务范围_嵌套时内层不提交_由最外层统一决定()
+    {
+        // 嵌套场景在本系统里是真实存在的：应用服务 A 开事务范围后调用了
+        // 也开了事务范围的应用服务 B。若内层自己提交，外层的回滚就回不到
+        // 内层已提交的部分 —— 批量审批这类操作会留下半成品。
+        var tx = GetRequiredService<IXjglTransactionScope>();
+        var guardians = GetRequiredService<IXjglRepository<StuGuardian>>();
+
+        var outer = "嵌套外层" + Guid.NewGuid().ToString("N")[..8];
+        var inner = "嵌套内层" + Guid.NewGuid().ToString("N")[..8];
+
+        await Should.ThrowAsync<InvalidOperationException>(async () =>
+        {
+            await tx.ExecuteAsync(async () =>
+            {
+                await guardians.InsertAsync(NewGuardian(outer), autoSave: true);
+
+                // 内层"成功"结束
+                await tx.ExecuteAsync(async () =>
+                {
+                    await guardians.InsertAsync(NewGuardian(inner), autoSave: true);
+                });
+
+                throw new InvalidOperationException("外层失败，内层也必须一起回滚");
+            });
+        });
+
+        (await guardians.GetCountAsync(g => g.Name == outer)).ShouldBe(0, "外层的数据应被回滚");
+        (await guardians.GetCountAsync(g => g.Name == inner))
+            .ShouldBe(0, "内层**不能**自己提交 —— 否则外层回滚后它会残留");
+    }
+
+    // ==================================================================
     // 提交与实例化
     // ==================================================================
 
@@ -394,6 +495,84 @@ public class ChangeFlowAppServiceTests : XjglIntegrationTestBase
         var updatedStudent = await _studentAppService.GetAsync(student.Id);
         updatedStudent.StudentStatusCode.ShouldBe(StudentStatuses.Studying);
         updatedStudent.SchoolOrgId.ShouldBe(schoolA.Id);
+    }
+
+    /// <summary>
+    /// 流程节点设为「不允许驳回」时，驳回必须被**真的**拒绝。
+    ///
+    /// 这条守的是一个"配了等于没配"的字段：`AllowReject` 一直存在模板节点上、
+    /// 也一路带进了实例化出的待办，但审核时**没有任何人读它** ——
+    /// 也就是说把节点设成不允许驳回，驳回照样成功，而且不报错。
+    ///
+    /// 用例把**所有**节点都设成不允许驳回，这样无论当前待办落在哪一步都必须被拦住
+    /// （不去依赖"合并后当前是第几步"这种细节，那是流程实例化算法自己的用例在守）。
+    /// </summary>
+    [Fact]
+    public async Task 节点不允许驳回时_驳回被拒绝()
+    {
+        SignIn();
+        var (_, _, _, schoolA, schoolB) = await BuildOrgTreeAsync();
+
+        var type = await _changeType.CreateTypeAsync(new CreateUpdateChangeTypeDto
+        {
+            Code = "NOREJECT_" + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant(),
+            Name = "不允许驳回的转学",
+            MaxApproveLevel = ApproveLevels.City,
+            AffectClass = true,
+            AfterStatusCode = StudentStatuses.TransferredIn
+        });
+
+        var template = await _changeType.SaveTemplateAsync(new SaveFlowTemplateDto
+        {
+            ChangeTypeId = type.Id,
+            Name = "不允许驳回的流程",
+            Nodes = new List<CreateUpdateFlowNodeDto>
+            {
+                new()
+                {
+                    Seq = 1, NodeName = "转入学校审核",
+                    OrgResolver = ChangeOrgResolvers.TargetSchool, RoleCode = "SchoolAdmin",
+                    MergeStrategy = ChangeMergeStrategies.MergeToLast,
+                    // ★ 本用例的关键：这个节点只允许「通过」
+                    AllowReject = false
+                },
+                new()
+                {
+                    Seq = 2, NodeName = "转入县区审核",
+                    OrgResolver = ChangeOrgResolvers.TargetCounty, RoleCode = "CountyAdmin",
+                    MergeStrategy = ChangeMergeStrategies.MergeToLast,
+                    AllowReject = false
+                }
+            }
+        });
+
+        await _changeType.PublishTemplateAsync(template.Id);
+
+        var student = await CreateStudentAsync(schoolA.Id, null, null);
+
+        var apply = await _flow.SubmitAsync(new SubmitChangeApplyDto
+        {
+            ChangeTypeId = type.Id,
+            StudentId = student.Id,
+            TargetSchoolOrgId = schoolB.Id,
+            Reason = "家庭搬迁"
+        });
+
+        var ex = await Should.ThrowAsync<BusinessException>(async () =>
+            await _flow.RejectAsync(new ChangeAuditActionDto
+            {
+                ApplyId = apply.Id,
+                Opinion = "材料不全"
+            }));
+
+        ex.Code.ShouldBe(XjglDomainErrorCodes.RejectNotAllowed);
+
+        // 驳回被拒之后，申请单必须原样停在原处（不能出现"报错了但状态已经改了"）
+        var unchanged = await _flow.GetApplyAsync(apply.Id);
+        unchanged.Status.ShouldBe(apply.Status);
+        unchanged.Tasks.ShouldContain(t => t.Status == ChangeTaskStatus.Pending,
+            "驳回被拒之后流程应当仍在等待处理");
+        unchanged.Tasks.ShouldNotContain(t => t.Status == ChangeTaskStatus.Rejected);
     }
 
     /// <summary>

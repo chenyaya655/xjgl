@@ -57,10 +57,29 @@ function toRoute(item: MenuItem, groupName: string, groupCode: string): RouteRec
 
   return {
     path: item.path,
-    name: item.code,
+    /**
+     * 路由名必须**全局唯一**：vue-router 的 `addRoute` 遇到重名时
+     * 会覆盖掉先前那一条，而 `getRoutes()` 里不会告诉你少了谁。
+     *
+     * 【为什么不能直接用 item.code】
+     * `code` 只在**同一个子系统内**唯一（后端是 (subsystem_id, code) 唯一索引），
+     * 跨子系统重名是完全正常的 —— 真实的例子：
+     *   - `Stu` 子系统有模块 code=Student → /student/list
+     *   - `Rpt` 子系统也有模块 code=Student → /report/student
+     * 直接拿 code 当路由名，两者就是同一个名字；下面的去重集合会把第二个
+     * **静默跳过**，表现为"菜单里有『学生统计』，点进去却是 404"。
+     * 这个缺陷真实发生过，而且只影响"跨子系统同 code"的那一个模块 ——
+     * 同一子系统内看不出来，所以很隐蔽。
+     *
+     * 因此在前面缀上子系统 code（`{groupCode}:{item.code}`，如 `Rpt:Student`）：
+     * 子系统 code 本身是主键级唯一的，拼出来的名字必然全局唯一。
+     * 原始的 code 仍放在 meta.code 里，需要时可用。
+     */
+    name: `${groupCode}:${item.code}`,
     component: resolveView(item.component),
     meta: {
       title: item.name,
+      code: item.code,
       icon: item.icon,
       groupName,
       groupCode,

@@ -8,7 +8,9 @@
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
-    "report": "playwright show-report"
+    "report": "playwright show-report",
+    "db:reset": "node ../../tools/reset-test-db.mjs",
+    "db:reset:force": "node ../../tools/reset-test-db.mjs --yes"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0"

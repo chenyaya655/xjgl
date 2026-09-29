@@ -97,6 +97,64 @@ public interface IPhotoCompensationService
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// 缩略图补齐。
+///
+/// 【为什么"新上传的"与"历史遗留的"共用这一个服务】
+/// 缩略图生成被移出上传请求之后（债 18），"刚上传还没有缩略图"与"功能上线前的老照片
+/// 从来就没有缩略图"（债 19）在数据上**是同一种状态**：<c>ThumbnailPath</c> 为空。
+/// 若为老数据另写一个"一次性回填任务"，就会出现两套判重口径与两处生成逻辑，
+/// 迟早出现"回填任务把新上传的又生成一遍"或反过来漏掉。
+/// 所以统一成"扫描 ThumbnailPath 为空 → 补齐"，由周期任务反复跑。
+///
+/// 【它是可选增强，绝不阻断上传】
+/// 生成失败、原图读不到、连存储都不可用，都只记计数与日志；
+/// 上传成功的判据自始至终只是"照片本体写成功"。
+/// </summary>
+public interface IPhotoThumbnailService
+{
+    /// <summary>
+    /// 扫一轮"缺缩略图"的照片并补齐。
+    /// </summary>
+    /// <param name="maxCount">单轮最多处理多少条，避免一次性把 NAS 与 CPU 打满。</param>
+    /// <param name="schoolOrgId">
+    /// 只补齐这一所学校的照片；<c>null</c> 表示全校全库。
+    ///
+    /// 【为什么需要它】这条队列有一个会**永久堵住**的失效模式：原图读不到的照片
+    /// （存储被清理、文件被手工删过）状态不变，于是**每一轮都会被重新扫到**。
+    /// 一旦这类记录数超过单轮的 <paramref name="maxCount"/>，
+    /// 比它们新的照片就永远轮不上 —— 台账里表现为"新上传的照片一直没有缩略图"，
+    /// 而日志里每轮都在跑、也不报错。
+    /// 本机测试库实测就是这个状态：415 条读不到原图的记录 > 每轮 200，导致新照片永不补齐。
+    ///
+    /// 指定学校既能给运维一个"就修这所学校"的入口，也让依赖它的测试**确定**。
+    /// （根治做法是给这类记录打一个"已确认原图缺失"的标记把它移出队列，
+    /// 那是数据清理策略，不在这里做。）
+    /// </param>
+    Task<PhotoThumbnailResultDto> EnsureThumbnailsAsync(
+        int maxCount = 200,
+        Guid? schoolOrgId = null,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>一轮缩略图补齐的结果。</summary>
+public sealed class PhotoThumbnailResultDto
+{
+    /// <summary>本轮扫描到的待补齐条数。</summary>
+    public int Scanned { get; set; }
+
+    /// <summary>成功生成并已写回台账的条数。</summary>
+    public int Generated { get; set; }
+
+    /// <summary>内容解码失败（不是图片/已损坏）的条数。</summary>
+    public int Undecodable { get; set; }
+
+    /// <summary>原图在主存储与降级区都读不到的条数。</summary>
+    public int MissingOriginal { get; set; }
+
+    public string Message { get; set; } = string.Empty;
+}
+
 /// <summary>读取到的照片内容。</summary>
 public sealed class PhotoContentResult
 {

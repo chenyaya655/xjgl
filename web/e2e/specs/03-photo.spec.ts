@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import { apiLogin, ensureSchool, login, realJpegBuffer, seedStudent, type SeededStudent } from './support/auth'
+import { apiLogin, ensureSchool, login, realJpegBuffer, seedStudent, uniqueSuffix, type SeededStudent } from './support/auth'
 
 /**
  * 照片管理流程：台账、缩略图、打包导出、存储状态。
@@ -12,14 +12,16 @@ import { apiLogin, ensureSchool, login, realJpegBuffer, seedStudent, type Seeded
  * 的表现都是"表格里一片空白"，而集成测试完全看不到。
  */
 test.describe('照片管理流程', () => {
+  /** 本 spec 的主体学生姓名；只在 beforeAll 里用一次，用例按**学籍辅号**定位。 */
+  const PHOTO_STUDENT_NAME = '端到端拍照生'
+
   let student: SeededStudent
-  let photoUploaded = false
 
   test.beforeAll(async ({ request }) => {
     const token = await apiLogin(request)
     const school = await ensureSchool(request, token)
 
-    student = await seedStudent(request, token, school.id, '端到端拍照生')
+    student = await seedStudent(request, token, school.id, PHOTO_STUDENT_NAME)
   })
 
   test.beforeEach(async ({ page }) => {
@@ -89,47 +91,75 @@ test.describe('照片管理流程', () => {
   })
 
   test('上传后台账能显示缩略图（图片请求带不上令牌，这条链路最容易坏）', async ({ page, request }) => {
-    // 照片用接口传（上传对话框的"选学校 + 选文件 + 匹配"编排脆弱，
+    // 照片用接口传（上传对话框的"选学校 + 选文件 + 匹配"编排脆弱），
     // 而本用例要守的是**界面渲染缩略图**这一段：
     //   /api/photos/{id}/thumbnail 需要 Bearer 令牌，而 <img src> 带不上，
     //   前端只能用 axios 取回 Blob 再 createObjectURL —— 路径写错、忘了 responseType:'blob'、
     //   忘了 revoke，表现都是"表格里一片空白"，只有真在浏览器里看才发现的。
+    //
+    // ⚠ 必须用一个**全新**的学生：复用同一个学生时，第二次上传相同内容会命中"秒传"，
+    // 直接返回已有记录（它的缩略图早被后台补上了），于是"上传响应里没有缩略图路径"
+    // 这条断言就不成立了 —— 那测的是秒传分支，不是本用例要守的渲染链路。
+    const token = await apiLogin(request)
+    const school = await ensureSchool(request, token)
+
+    const subject = await seedStudent(request, token, school.id, `端到端缩略图生${uniqueSuffix()}`)
+
     const jpeg = await realJpegBuffer(page)
 
     const upload = await request.post('/api/photos/upload-one', {
       headers: { Authorization: `Bearer ${await apiLogin(request)}` },
       multipart: {
-        studentId: student.id,
-        file: { name: `${student.studentNo}.jpg`, mimeType: 'image/jpeg', buffer: jpeg }
+        studentId: subject.id,
+        file: { name: `${subject.studentNo}.jpg`, mimeType: 'image/jpeg', buffer: jpeg }
       }
     })
 
     expect(upload.ok(), `上传失败：${upload.status()} ${await upload.text()}`).toBeTruthy()
 
-    const uploaded = (await upload.json()) as { success: boolean; width: number; thumbnailPath?: string }
+    const uploaded = (await upload.json()) as {
+      success: boolean
+      skipped: boolean
+      width: number
+      thumbnailPath?: string | null
+    }
 
     expect(uploaded.success).toBe(true)
+    expect(uploaded.skipped, '新学生第一次上传不该命中秒传').toBe(false)
     expect(uploaded.width).toBeGreaterThan(0)
-    expect(uploaded.thumbnailPath, '上传后应当生成了缩略图').toBeTruthy()
+
+    // ★ 上传响应里**不该**有缩略图路径 —— 生成已经移出上传请求（债 18）。
+    //
+    // 这条断言原来写的是 `expect(uploaded.thumbnailPath).toBeTruthy()`，
+    // 在"上传请求内同步生成"的那个版本上是对的，但那个行为已经改掉了；
+    // 它之所以还能"偶尔通过"，是因为本地测试库当时恰好积压不多、
+    // 后台任务正好把这张补上了 —— 也就是说它测的是**后台任务碰巧跑过**，
+    // 而不是上传契约。
+    expect(uploaded.thumbnailPath ?? null, '缩略图生成已移出上传请求').toBeNull()
 
     await page.goto('/photo/list')
-    await page.getByPlaceholder('学籍辅号 / 姓名').fill(student.studentNo)
+    await page.getByPlaceholder('学籍辅号 / 姓名').fill(subject.studentNo)
     await page.getByRole('button', { name: '查询' }).click()
 
-    const row = page.locator('.el-table__row', { hasText: student.studentNo })
+    const row = page.locator('.el-table__row', { hasText: subject.studentNo }).first()
 
     await expect(row).toBeVisible()
 
-    // 缩略图是 el-image 内部的 <img class="el-image__inner">：
-    // 用精确类名而不是 `img`，否则可能匹配到行内的图标（图标没有 naturalWidth，会误判）
+    // 缩略图由后台任务补齐后再刷新列表；
+    // 后台任务扫描是"**新的优先**"，所以刚上传的这张第一轮就能拿到。
+    // 默认首轮延迟 60 秒、间隔 300 秒 —— 断言超时按它的量级给。
     const img = row.locator('img.el-image__inner').first()
 
-    await expect(img).toBeVisible()
     await expect
-      .poll(async () => img.evaluate((el) => (el as HTMLImageElement).naturalWidth))
-      .toBeGreaterThan(0)
+      .poll(
+        async () => {
+          await page.getByRole('button', { name: '查询' }).click()
 
-    photoUploaded = true
+          return img.evaluate((el) => (el as HTMLImageElement).naturalWidth).catch(() => 0)
+        },
+        { timeout: 150_000, intervals: [3_000, 5_000, 10_000] }
+      )
+      .toBeGreaterThan(0)
   })
   test('打包导出对话框可以打开并说明导出范围', async ({ page }) => {
     await page.goto('/photo/list')
@@ -145,15 +175,29 @@ test.describe('照片管理流程', () => {
     await expect(dialog).toBeHidden()
   })
 
-  test('缺照片名单能查到刚建的学生（判据在主表 PhotoPath）', async ({ page }) => {
-    // 这个用例依赖"该学生当前没有照片"：如果上面那个上传用例已跑过，就跳过断言强度
-    test.skip(photoUploaded, '上传用例已经给该学生传了照片')
+  test('缺照片名单能查到刚建的学生（判据在主表 PhotoPath）', async ({ page, request }) => {
+    // 【为什么要新建一个学生，而不是复用 beforeAll 里那个】
+    // 判据是"该学生没有照片"。而测试库是长期累积的：
+    // 上一轮跑这个 spec 时已经给那个学生传过照片，复用就永远查不到
+    // —— 第一版就是这个写法，于是它**只能跑一次**。
+    //
+    // 姓名只能用规范汉字（后端校验拒收数字/字母），所以序号要转成中文数字，
+    // 不能用常规的"加时间戳保唯一"。
+    const token = await apiLogin(request)
+    const school = await ensureSchool(request, token)
+
+    const fresh = await seedStudent(
+      request,
+      token,
+      school.id,
+      `缺照片测试生${uniqueSuffix()}`
+    )
 
     await page.goto('/photo/list')
     await page.getByRole('tab', { name: /缺照片名单/ }).click()
-    await page.getByPlaceholder(/姓名|学籍辅号/).last().fill(student.studentNo)
+    await page.getByPlaceholder(/姓名|学籍辅号/).last().fill(fresh.studentNo)
     await page.getByRole('button', { name: '查询' }).click()
 
-    await expect(page.locator('.el-table__row', { hasText: student.studentNo })).toBeVisible()
+    await expect(page.locator('.el-table__row', { hasText: fresh.studentNo }).first()).toBeVisible()
   })
 })

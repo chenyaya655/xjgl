@@ -1,0 +1,83 @@
+# 河南省学籍管理系统 —— PC 端（Deployment）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# web 这个容器是"nginx 托管静态资源 + 反代 API"，它自己**没有任何状态**：
+#   - 静态资源打在镜像里（deploy/web.Dockerfile）；
+#   - /api、/connect 由容器里的 nginx 反代到 Service `api`（deploy/nginx.conf）；
+#   - 上传体积（210m）、长请求超时（300s）、深链回落（try_files → index.html）
+#     都在那份 nginx.conf 里，**不在 Ingress 上**（见 ingress.yaml 的说明）。
+#
+# 因此它可以随便加副本，也可以和 api 分开滚动。
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/component: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: xjgl-web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: xjgl-web
+        app.kubernetes.io/name: xjgl
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: web
+          # ⚠ 与 api 同理：本地构建的镜像，不在 registry 上，必须 IfNotPresent
+          image: xjgl/web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: TZ
+              value: "Asia/Shanghai"
+          # ---- 探针 ----
+          # 探的是 `/`（nginx 的 index.html），**不是** `/health`。
+          # 这一条很容易写反，所以说明理由：
+          #   - web 的 `/health` 会被 nginx 反代到 api，于是"api 挂了"会让
+          #     所有 web 副本一起变成 NotReady —— 后端故障被放大成"整个前端不可用"，
+          #     而实际上静态页还能打开、错误页也还能显示；
+          #   - 真正决定"要不要给这个站点放流量"的是 api 的 readiness（它探 /health，
+          #     会如实返回 503）。
+          # 换句话说：web 探 `/` 是在回答"静态页还能不能发出去"，
+          # 这是在 web 这一层唯一有意义的问题。
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            # nginx 只发静态文件，本身很轻；真正的 CPU 在 api
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

@@ -1,0 +1,136 @@
+# 河南省学籍管理系统 —— Ingress（外部入口）
+#
+# ⚠ 同 namespace.yaml 顶部声明：本目录清单**从未在真实集群上应用过**。
+#
+# ---------------------------------------------------------------------------
+# 【深链回落是怎么实现的 —— 这一条最容易做错】
+#
+# 前端用 history 路由，直接刷新 /student/list 时请求会打到入口。deploy/nginx.conf
+# 里的做法是 `try_files $uri $uri/ /index.html`：找不到文件就把请求交给
+# 前端壳子，由前端路由接住。
+#
+# ⚠ **Ingress 没有 try_files 这种能力**。所以这里的做法是把它拆成两件事：
+#   1. Ingress 把 `/api`、`/connect`、`/swagger`、`/health` 精确地送去 api；
+#   2. **其余所有路径**（`/` 这条 catch-all）送去 web ——
+#      web 容器里的那份 nginx.conf 才是真正做 `try_files ... /index.html` 的地方。
+#
+# 结论：**深链回落能不能工作，取决于 web 镜像里的 nginx.conf 有没有一起部署**。
+# 只 apply 这个 Ingress 而不改 nginx.conf（或用了别的 web 镜像），
+# 表现就是"点菜单正常、刷新深链 404"。
+#
+# ⚠ ingressClassName 必须换成集群里实际存在的入口控制器：
+#   - k3s 默认是 **Traefik**（`ingressClassName: traefik`），而下面的
+#     `nginx.ingress.kubernetes.io/*` 注解**在 Traefik 上不会生效**；
+#   - 用 ingress-nginx 时保持 `nginx`。
+#   在 k3s 上用 Traefik 时，等价能力要用 Middleware 表达（缓冲与超时），
+#   见文件末尾被注释掉的 Traefik 片段 —— 那些值不是装饰：
+#   少了它们，大文件上传会在入口被 413 拒掉（接口层的 200MB 限制成了摆设），
+#   导出 zip / 花名册这类几十秒的同步请求会在入口超时。
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: xjgl
+  namespace: xjgl
+  labels:
+    app.kubernetes.io/name: xjgl
+    app.kubernetes.io/part-of: xjgl
+  annotations:
+    # 与 PhotosController 的 RequestSizeLimit(200MB) 对齐，留一点余量
+    # （与 deploy/nginx.conf 的 client_max_body_size 210m 是同一个数）
+    nginx.ingress.kubernetes.io/proxy-body-size: "210m"
+    # 大文件上传时不要在入口做缓冲写盘（对应 nginx.conf 的 proxy_request_buffering off）
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # 导出 zip / 花名册是同步生成，可能几十秒（对应 nginx.conf 的 300s）
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: nginx
+  # ⚠ 必须替换成你自己的域名，并且与 configmap.yaml 里的
+  #   App__SelfUrl / App__ClientUrl / AuthServer__Authority 完全一致 ——
+  #   不一致的典型表现是"登录成功但所有接口 401"。
+  #
+  # ⚠ 生产必须 HTTPS（AuthServer__RequireHttpsMetadata=true）。
+  #   这里刻意**没有**写 tls: 段：证书怎么来（cert-manager？外部反代？手工 Secret？）
+  #   是现场决定，写死了反而误导。用 cert-manager 时加：
+  #     tls:
+  #       - hosts: ["xjgl.example.edu.cn"]
+  #         secretName: xjgl-tls
+  tls: []
+  rules:
+    - host: xjgl.example.edu.cn
+      http:
+        paths:
+          # ---- 后端：应用服务（/api/app/*）、照片（/api/photos/*）、
+          #      导出任务下载（/api/export-task/*）、登录（/connect/*）、
+          #      Swagger（/swagger）----
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /connect
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /swagger
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          # 健康检查透传（外部负载均衡/拨测用）。
+          # 200 = 进程活着且数据库连得上；503 = 数据库连不上。
+          # 不需要对外暴露的话，删掉这一段即可（集群内探针走的是 Pod，不经过 Ingress）。
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          # ---- 前端 + 深链回落：其余所有路径都交给 web ----
+          # 这条 catch-all 就是"深链回落"的前半段，后半段在 web 容器里的
+          # nginx.conf（try_files $uri $uri/ /index.html）。
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http
+# ---------------------------------------------------------------------------
+# 【在 k3s（Traefik）上要用的话，把上面的注解换成下面的 Middleware】
+#
+# 这段是**注释掉的示例**，因为 Traefik 的 CRD 名称/写法与 ingress-nginx 完全不同，
+# 且本仓库没有在真实集群上验证过 —— 抄之前请对着你那个版本的 Traefik CRD 核一遍。
+#
+# apiVersion: traefik.io/v1alpha1
+# kind: Middleware
+# metadata:
+#   name: xjgl-entry
+#   namespace: xjgl
+# spec:
+#   buffering:
+#     # 对应 nginx 的 client_max_body_size 210m：请求体超过它会被入口拒掉
+#     maxRequestBodyBytes: 220200960
+#     memRequestBodyBytes: 10485760
+#   # 长请求（导出 zip / 花名册）转发超时
+#   responseForwarding:
+#     flushInterval: 100ms
+#
+# 然后在 Ingress 上加注解指向它：
+#   traefik.ingress.kubernetes.io/router.middlewares: xjgl-xjgl-entry@kubernetescrd
+#
+# ⚠ 还有一条 k3s 上的坑：Traefik 默认**只监听 80/443 之外的转发规则**，
+#   而且它的 `serversTransport` 转发超时也可能掐掉长请求 ——
+#   冒烟时如果"小接口正常、导出必失败"，先怀疑入口超时，
+#   再去看 api 的日志（两边都要看，否则会误判成后端 bug）。
+# ---------------------------------------------------------------------------

@@ -34,8 +34,26 @@ public class StudentChangeLogDto : EntityDto<Guid>
 /// <summary>变更流水的查询条件。</summary>
 public class StudentChangeLogQueryDto : PagedAndSortedResultRequestDto
 {
-    /// <summary>按学生查（学生详情页用）。为空则按其它条件查。</summary>
+    /// <summary>
+    /// 按学生查。
+    ///
+    /// 【它曾经是个"死参数"】DTO 上一直有这个字段，但全局查询的实现**根本没读它** ——
+    /// 传了 StudentId 会返回**全部**流水（HTTP 200、看起来一切正常），
+    /// 调用方以为筛的是一个人，实际拿到的是所有人。
+    /// 这正是本项目最警惕的那类失败：不报错、只是结果不对。
+    /// 现在真的按它过滤。
+    /// </summary>
     public Guid? StudentId { get; set; }
+
+    /// <summary>
+    /// 按姓名 / 学籍辅号模糊匹配（校长与县区管理员最常用的查法：
+    /// "这个学生到底被改过什么"）。
+    ///
+    /// 在本页之前只能在前端"对当前页结果做过滤"，而当前页过滤会漏掉其它页的命中项 ——
+    /// 于是补上这个服务端条件。与 `StudentAppService` 的关键字口径一致（Contains）。
+    /// </summary>
+    [StringLength(64)]
+    public string? Keyword { get; set; }
 
     /// <summary>按动作过滤（Create / Update / Delete / Change）。</summary>
     [StringLength(16)]

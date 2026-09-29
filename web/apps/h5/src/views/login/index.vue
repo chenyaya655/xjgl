@@ -104,9 +104,18 @@ async function handleSubmit(): Promise<void> {
         </el-button>
       </el-form>
 
+      <!--
+        【这里原来是一个死链】
+        原来写的是 `<el-link @click="router.push('/login')">还没有账号？</el-link>` ——
+        而它本身就在登录页上，点下去等于"跳到自己"，什么都不会发生。
+        移动端**没有**激活页（激活要核对手机号与身份证，属于电脑端的操作），
+        所以这里不给链接，只把"该去哪里办"讲清楚。
+      -->
       <div class="login__footer">
-        <el-link type="primary" @click="router.push('/login')">还没有账号？</el-link>
-        <span class="login__hint">请向学校管理员索取激活码，在电脑端完成账号激活</span>
+        <span class="login__hint">
+          还没有账号？账号由学校管理员在「预置与激活」里预置并发放激活码，
+          请在<strong>电脑端</strong>打开「账号激活」完成激活后再登录。
+        </span>
       </div>
     </el-card>
   </div>
