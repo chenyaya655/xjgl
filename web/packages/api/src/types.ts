@@ -1785,14 +1785,10 @@ export const ExportTaskKinds = {
 
 export type ExportTaskKind = (typeof ExportTaskKinds)[keyof typeof ExportTaskKinds]
 
-export const ExportTaskStatuses = {
-  Pending: 'Pending',
-  Running: 'Running',
-  Succeeded: 'Succeeded',
-  Failed: 'Failed',
-  Canceled: 'Canceled',
-  Expired: 'Expired'
-} as const
+// 任务状态的常量定义挪到了 `progress.ts`，这里原样再导出一次：包根入口与
+// 各调用点的 `import { ExportTaskStatuses } from '@xjgl/api'` 一行都不用改。
+// 挪动的理由见 progress.ts 顶部（那个文件必须零运行时依赖，才能被 node --test 直接跑）。
+export { ExportTaskStatuses } from './progress'
 
 export interface ExportTask {
   id: string

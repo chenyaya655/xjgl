@@ -98,6 +98,26 @@ public interface IXjglRepository<TEntity> : ITransientDependency
         bool autoSave = false,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// **只更新指定的若干列**（按实体属性名给出），其余列原样不动。
+    ///
+    /// 【为什么必须有这个方法，而不是"查出实体、改两个字段、整行写回"】
+    ///   整行写回的语义是"以我手里这份快照为准"，而长耗时任务手里的快照必然是旧的：
+    ///   导出跑几十秒期间用户可能点了取消、或另一处改了 Message，
+    ///   整行覆盖会把那些修改**静默抹掉**（表现为"取消按钮点了没反应"）。
+    ///   最典型、也是本方法第一个用户的场景是**进度上报**（`Processed`/`Total`）：
+    ///   它每秒可能写一次，若每次都整行覆盖，任务表就变成"谁最后写谁赢"。
+    ///
+    /// 【代价】调用方要对"列名拼错"负责：拼错的列会被实现层**拒绝并抛异常**
+    ///   （见实现里的校验），而不是永远写不进去 —— 后者表现为"进度永远不动"，
+    ///   排查成本远高于一次响亮的失败。
+    /// </summary>
+    Task UpdateColumnsAsync(
+        Guid id,
+        IReadOnlyDictionary<string, object?> columns,
+        bool autoSave = false,
+        CancellationToken cancellationToken = default);
+
     /// <summary>删除（实体实现 ISoftDelete 时为软删除，并写入删除审计字段）。</summary>
     Task DeleteAsync(TEntity entity, bool autoSave = false, CancellationToken cancellationToken = default);
 

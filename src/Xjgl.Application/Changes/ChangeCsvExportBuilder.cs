@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Volo.Abp.DependencyInjection;
 using Xjgl.Data;
+using Xjgl.Exporting;
 using Xjgl.Text;
 
 namespace Xjgl.Changes;
@@ -66,7 +67,7 @@ public class ChangeCsvExportBuilder : IChangeCsvExportBuilder, ITransientDepende
         ChangeApplyQueryDto query,
         CancellationToken cancellationToken = default)
     {
-        var (applies, total, truncated) = await LoadAppliesAsync(query);
+        var (applies, total, truncated) = await LoadAppliesAsync(query, cancellationToken);
 
         var rows = new List<IEnumerable<string?>>
         {
@@ -100,7 +101,7 @@ public class ChangeCsvExportBuilder : IChangeCsvExportBuilder, ITransientDepende
         ChangeApplyQueryDto query,
         CancellationToken cancellationToken = default)
     {
-        var (applies, total, truncated) = await LoadAppliesAsync(query);
+        var (applies, total, truncated) = await LoadAppliesAsync(query, cancellationToken);
 
         var rows = new List<IEnumerable<string?>>
         {
@@ -157,7 +158,8 @@ public class ChangeCsvExportBuilder : IChangeCsvExportBuilder, ITransientDepende
     /// 按条件分页累积申请单（复用列表查询 → 数据范围与码值翻译都一致）。
     /// </summary>
     private async Task<(List<ChangeApplyListItemDto> Applies, long Total, bool Truncated)> LoadAppliesAsync(
-        ChangeApplyQueryDto query)
+        ChangeApplyQueryDto query,
+        CancellationToken cancellationToken)
     {
         var maxRows = Math.Max(1, _configuration.GetValue(MaxRowsConfigKey, DefaultMaxRows));
 
@@ -187,6 +189,14 @@ public class ChangeCsvExportBuilder : IChangeCsvExportBuilder, ITransientDepende
 
             total = page.TotalCount;
             applies.AddRange(page.Items);
+
+            // ★ 债 23：每取完一页上报一次进度，轮询才看得到百分比。
+            //
+            // 分母用 `min(总数, 上限)` 而不是原样的总数：这一种会被 `MaxRows` 截断，
+            // 截断时用原总数会让"已处理"永远追不上、界面永远差几个百分点（看着像卡住）。
+            // 口径是"进度以本次真的会写出去的行数为分母"，因此 `Processed <= Total`
+            // 与"跑完时 == RowCount"两条都天然成立。
+            await ExportProgress.ReportAsync(applies.Count, Math.Min(total, maxRows), cancellationToken);
 
             if (page.Items.Count < take || applies.Count >= total)
             {

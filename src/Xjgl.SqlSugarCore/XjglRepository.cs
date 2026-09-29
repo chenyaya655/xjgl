@@ -312,6 +312,151 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
         }
     }
 
+    /// <summary>
+    /// 只更新指定列。
+    ///
+    /// 【为什么是原生参数化 UPDATE，而不是 SqlSugar 的链式局部更新】
+    ///   SqlSugar 的 `SetColumns` 有两个重载：一个接**编译期常量**列名列表，
+    ///   另一个接 `(实体, 新值) => new 实体 { ... }` 的表达式 —— 后者要求"值和列名"
+    ///   一起写在表达式里，而这个方法的列名是**运行时**才知道的（调用方给的是字典）。
+    ///   硬凑的话得在运行时反射构造表达式树，比直接拼一句参数化 SQL 更难读、更容易错。
+    ///   列名与表名仍走本仓储自己的约定（<see cref="ToSnakeCase"/> + 实体上的
+    ///   `[SugarTable]`/类型名），值一律走参数 —— 没有任何字符串拼接进 SQL 的值。
+    ///
+    /// 两个必须拒绝的入参，都是为了把"静默不生效"变成"当场失败"：
+    ///   1. 属性名不在实体上 → 抛异常（否则会拼出一列不存在的 SQL，报的是数据库语法错，
+    ///      看起来像基础设施故障，其实是调用方拼错了列名）；
+    ///   2. <c>Id</c> 与创建侧审计列不允许由调用方改 → 抛异常（改 Id 等于把这一行搬到
+    ///      另一个身份上，而"创建时间"被后写等于审计失真）。
+    /// </summary>
+    public virtual async Task UpdateColumnsAsync(
+        Guid id,
+        IReadOnlyDictionary<string, object?> columns,
+        bool autoSave = false,
+        CancellationToken cancellationToken = default)
+    {
+        // 用全限定的 Volo.Abp.Check：SqlSugar 里也有一个同名的 Check 类，
+        // 直接写 `Check` 会是 CS0104 二义性（这个坑在引入 SqlSugar 命名空间时很容易踩）。
+        Volo.Abp.Check.NotNull(columns, nameof(columns));
+
+        if (columns.Count == 0)
+        {
+            return;
+        }
+
+        var assignments = new List<string>(columns.Count);
+        var parameters = new List<SugarParameter>(columns.Count + 1);
+        var index = 0;
+
+        SugarParameter NewParameter(string name, object? value)
+        {
+            // 用 `SugarParameter` 而不是 ADO 的 `SqlParameter`：SqlSugar 5.1 的 Ado
+            // 只认它自己的参数类型（`SqlSugar.SqlParameter` 这个类型根本不存在，
+            // 编译期就会红），名字里带 Sql 的那个是 System.Data 家族，不是这里要的。
+            return new SugarParameter(name, value ?? DBNull.Value);
+        }
+
+        void AddColumn(string propertyName, object? value)
+        {
+            // 列名用**双引号**包起来：PostgreSQL 会把未加引号的标识符折叠成小写，
+            // 而本项目的列名由属性名转蛇形（`LastModificationTime` → `last_modification_time`），
+            // 不加引号时大小写对不上就会报"列不存在"。
+            var columnName = ToSnakeCase(propertyName);
+
+            // 每次出现都用**独立的**参数名。
+            // 看起来可以把同一个列名复用成一个参数（SqlSugar 的 `SqlParameter` 是
+            // 按属性名索引的），但那要求我们自己猜它的键名规则 ——
+            // 猜错的表现是"参数没绑上 → 写进去的是 NULL"，极难发现。
+            // 一个变量一个名字，绑定规则就完全交给框架。
+            var parameterName = $"p{index++}";
+
+            assignments.Add($"\"{columnName}\" = @{parameterName}");
+            parameters.Add(NewParameter(parameterName, value));
+        }
+
+        foreach (var (propertyName, value) in columns)
+        {
+            var property = typeof(TEntity).GetProperty(
+                propertyName,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+
+            if (property == null)
+            {
+                throw new BusinessException(XjglDomainErrorCodes.DataNotFound)
+                    .WithData("reason", $"要更新的列「{propertyName}」不是 {typeof(TEntity).Name} 的属性");
+            }
+
+            // "Id" 用字面量而不是 nameof(IEntity.Id)：ABP 10 的 IEntity 是个**标记接口**
+            // （仅 `IEntity<TKey>` 上才有 Id），`nameof(IEntity.Id)` 根本编译不过。
+            if (property.Name is "Id" or "CreationTime" or "CreatorId" or "IsDeleted")
+            {
+                throw new BusinessException(XjglDomainErrorCodes.ValidationFailed)
+                    .WithData("reason", $"列「{property.Name}」不允许用局部更新改写");
+            }
+
+            AddColumn(property.Name, value);
+        }
+
+        // 修改审计由仓储统一补：局部更新绕过了 SetModificationAuditProperties
+        //（那里需要一个实体对象），若不显式带上，这些行的"最后修改时间"会一直停在创建时刻。
+        var modificationTimeProperty = typeof(TEntity).GetProperty(
+            nameof(IHasModificationTime.LastModificationTime),
+            BindingFlags.Public | BindingFlags.Instance);
+
+        if (modificationTimeProperty is { CanWrite: true }
+            && !columns.ContainsKey(modificationTimeProperty.Name))
+        {
+            // 借一个空实体让 ABP 的审计设置器算时间：它要读 IClock / ICurrentUser，
+            // 自己 new 一个 DateTime.Now 会与全系统的时间口径不一致。
+            var probe = new TEntity();
+
+            TrySetAudit(() => AuditPropertySetter.SetModificationProperties(probe), "修改");
+
+            if (modificationTimeProperty.GetValue(probe) is { } modificationTime)
+            {
+                AddColumn(modificationTimeProperty.Name, modificationTime);
+            }
+        }
+
+        var tableName = GetTableName();
+        var idParameterName = $"p{index}";
+
+        parameters.Add(NewParameter(idParameterName, id));
+
+        await Client.Ado.ExecuteCommandAsync(
+            $"UPDATE {tableName} SET {string.Join(", ", assignments)} WHERE \"id\" = @{idParameterName}",
+            parameters.ToArray());
+
+        if (autoSave)
+        {
+            await SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// 表名。**必须问 SqlSugar**，不能自己用类型名或 <c>[SugarTable]</c> 拼。
+    ///
+    /// 这里踩过一次：`SysExportTask` 上没有 `[SugarTable]` 特性，表名是靠
+    /// `Xjgl:SqlSugar:UseSnakeCaseTableName=true` 这个**全局配置**把
+    /// `SysExportTask` 转成 `sys_export_task` 的。自己回落到类型名会拼出
+    /// `sysexporttask`，数据库回的是 `42P01: relation "sysexporttask" does not exist` ——
+    /// 而进度上报把异常吞掉只记警告，于是表现成"进度永远不动"，
+    /// 排查时完全看不出是表名的问题。
+    /// </summary>
+    private string GetTableName()
+    {
+        var entityInfo = Client.EntityMaintenance.GetEntityInfo<TEntity>();
+
+        if (!string.IsNullOrWhiteSpace(entityInfo.DbTableName))
+        {
+            return entityInfo.DbTableName;
+        }
+
+        // 退路极少走到（SqlSugar 一定会算出表名），但真走到时也要是**能用的**名字，
+        // 而不是一个必然 42P01 的类名 —— 至少让它与仓储的列名约定保持一致。
+        return ToSnakeCase(typeof(TEntity).Name);
+    }
+
     public virtual async Task DeleteAsync(
         TEntity entity,
         bool autoSave = false,

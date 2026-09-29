@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { ExportTaskStatuses, describeTruncation, exportTaskApi, saveBlob } from '@xjgl/api'
+import { ExportTaskStatuses, describeExportProgress, describeTruncation, exportTaskApi, saveBlob } from '@xjgl/api'
 import type { ExportTask } from '@xjgl/api'
 import AppIcon from '@/components/AppIcon.vue'
 
@@ -84,9 +84,12 @@ function progressText(task: ExportTask): string {
     parts.push('排队等待后台执行')
   }
 
-  // 执行中的任务给一个数字进度：只说"执行中"用户无从判断还要等多久
-  if (task.status === ExportTaskStatuses.Running && task.total > 0) {
-    parts.push(`已处理 ${task.processed} / ${task.total}`)
+  // 执行中叠一句过程文案（含真百分比）：只说"执行中"用户无从判断还要等多久。
+  // 走的是与八个导出入口**同一个**函数 —— 这里曾经自己实现了一遍"已处理 x / y"，
+  // 而"进度文案有两处实现"正是债 23 要消灭的那类重复（改一处忘一处，两处会不一致）。
+  // 终态不叠：成功/失败/取消/过期时 message 已经把话说完了。
+  if (task.status === ExportTaskStatuses.Running) {
+    parts.push(describeExportProgress(task))
   }
 
   return parts.length > 0 ? parts.join(' · ') : '—'

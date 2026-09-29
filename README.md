@@ -168,10 +168,10 @@ warning : Please obtain a license from https://sixlabors.com/pricing/
 ## 测试
 
 ```bash
-# 单元测试：177 个，不依赖数据库（含 PDF 渲染与图像缩放）
+# 单元测试：181 个，不依赖数据库（含 PDF 渲染与图像缩放）
 dotnet run --project test/Xjgl.Domain.Tests
 
-# 集成测试：268 个，打真实 PostgreSQL
+# 集成测试：360 个，打真实 PostgreSQL
 dotnet run --project test/Xjgl.Application.Tests
 
 # 端到端：50 个用例（Playwright，chromium + h5 两个项目，自动拉起前后端）

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   changeFlowApi,
   changeTypeApi,
+  describeExportProgress,
   describeTruncation,
   exportTaskApi,
   saveBlob
@@ -264,7 +265,9 @@ async function exportAuditTrail(): Promise<void> {
       {
         shouldStop: () => disposed,
         onProgress: (t: ExportTask) => {
-          progressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+          // 审核流水导出是分页累积的，**有**真百分比（已处理 N / M（x%））；
+          // 文案只有 `describeExportProgress` 一处实现（债 23）。
+          progressText.value = describeExportProgress(t)
         }
       }
     )

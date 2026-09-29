@@ -7,6 +7,7 @@ import {
   orgApi,
   studentApi,
   studentImportApi,
+  describeExportProgress,
   describeTruncation,
   saveBlob
 } from '@xjgl/api'
@@ -563,8 +564,10 @@ async function runExportTask(
     const task = await exportTaskApi.run(input, {
       shouldStop: () => disposed,
       onProgress: (t: ExportTask) => {
-        // 让提示反映真实状态（排队中 → 执行中）
-        progressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+        // 让提示反映真实进度（排队中 → 已处理 3,000 / 12,000（25%）→ 正在生成…）。
+        // 文案只有 `describeExportProgress` 一处实现：这里有四个入口，
+        // 各写一遍必然有漏改的（债 23）。
+        progressText.value = describeExportProgress(t)
       }
     })
 
@@ -1533,7 +1536,7 @@ onMounted(async () => {
   transform: scale(0.9);
 }
 
-/* 导出/打印任务的进行状态（排队中 / 正在生成） */
+/* 导出/打印任务的进行状态（排队中 / 已处理 N / M（x%） / 正在生成） */
 .student-list__progress {
   display: inline-block;
   margin-left: 8px;

@@ -104,6 +104,13 @@ export * from './http'
 export * from './permissions'
 export * from './types'
 
+// 进度文案单独放一个文件（`progress.ts`）再从这里转出去，而不是直接写在本文件里。
+// 理由是**可测**：本文件顶部 import 了 axios（`./http`），而前端的单测是
+// `node --test` 直接跑 `.ts` 源文件、不打包 —— 被测函数若跟 axios 同处一个模块，
+// 单测就得把 axios 那一串依赖一起拉起来。放进零依赖的独立文件后，
+// 单测可以只 import 那一个文件（见 pc 的 `exportProgress.test.ts`）。
+export { describeExportProgress } from './progress'
+
 /**
  * 后端接口地址集中定义。
  *

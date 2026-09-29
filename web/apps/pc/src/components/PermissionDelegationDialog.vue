@@ -178,6 +178,18 @@ const usersLoading = ref(false)
 const usersFailed = ref('')
 
 /**
+ * 命中总数 > 渲染条数（被 `USER_PAGE_SIZE` 截断）：必须明确提示，不能静默截断。
+ *
+ * 【为什么这一句是必需的（债 30 / 规约 12.2）】
+ *   教师账号动辄上万条，所以这里只能"关键字服务端检索 + 硬上限"，
+ *   而不是把全部账号塞进下拉。但上限一旦存在就必须说出来：
+ *   搜"张"命中几百人却只显示 100 条时，界面若无提示，用户会得出
+ *   "系统里没有这个老师"的错误结论 —— 这与 H5 `views/change/apply.vue`
+ *   的"结果较多，请继续输入以缩小范围"是同一条口径。
+ */
+const usersTruncated = ref(false)
+
+/**
  * 已选中的被委派人。
  *
  * 【为什么要把选中项单独留住】
@@ -240,6 +252,11 @@ async function loadUsers(filter?: string): Promise<void> {
     }
 
     const items = result.items ?? []
+
+    // 截断判定只能用**服务端返回的条数**：算上下面并回来的"选中项"，
+    // 会在"刚好只多一条"时把提示吞掉（那就又变成静默截断了）
+    usersTruncated.value = result.totalCount > items.length
+
     const selected = selectedUser.value
 
     // 把选中项并回列表，否则选完再搜索时下拉会显示成 Guid（见 selectedUser 的说明）
@@ -255,6 +272,7 @@ async function loadUsers(filter?: string): Promise<void> {
     }
 
     users.value = []
+    usersTruncated.value = false
     usersFailed.value = isJsonParseError(error)
       ? `读取用户列表失败：接口未授权时被重定向到登录页（返回的不是 JSON）。` +
         `请确认当前账号拥有框架权限 AbpIdentity.Users；没有它就无法选择被委派人。`
@@ -331,6 +349,7 @@ function openForm(): void {
   form.remark = ''
   selectedUser.value = null
   usersFailed.value = ''
+  usersTruncated.value = false
   permissionsFailed.value = ''
 
   void loadUsers()
@@ -452,6 +471,7 @@ watch(visible, (opened) => {
           <!--
             远程搜索而不是一次拉全量用户：教师账号动辄上万条，
             一次拉回来既慢又会把下拉塞满；这里按姓名/用户名向后端要一页。
+            这一页是**有硬上限**的（USER_PAGE_SIZE），所以下面必须把"被截断了"说出来。
           -->
           <el-select
             v-model="form.delegateeUserId"
@@ -467,6 +487,11 @@ watch(visible, (opened) => {
           >
             <el-option v-for="u in users" :key="u.id" :label="userLabel(u)" :value="u.id" />
           </el-select>
+
+          <!-- 限了条数就必须说出来：静默截断会让人以为"系统里没有这个老师" -->
+          <div v-if="usersTruncated && !usersFailed" class="delegation__truncated">
+            结果较多，请继续输入以缩小范围。
+          </div>
         </el-form-item>
 
         <el-form-item label="权限" required>
@@ -663,6 +688,17 @@ watch(visible, (opened) => {
 
 .delegation__hint--error {
   color: var(--el-color-danger);
+}
+
+/*
+ * 「结果较多」用警告色而不是灰色说明：它不是错误（列表仍可用），
+ * 但漏看它的后果是"以为系统里没有这个老师"，必须比普通提示更显眼。
+ */
+.delegation__truncated {
+  margin-top: 4px;
+  color: var(--el-color-warning);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .delegation__perm {

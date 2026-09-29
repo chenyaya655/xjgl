@@ -2,7 +2,14 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { describeTruncation, exportTaskApi, provisionApi, orgApi, saveBlob } from '@/api'
+import {
+  describeExportProgress,
+  describeTruncation,
+  exportTaskApi,
+  provisionApi,
+  orgApi,
+  saveBlob
+} from '@/api'
 import type { CreatePredefineUser, ExportTask, OrgDto, OrgTreeNode, PredefineUser } from '@/api/types'
 import { ExportTaskKinds } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
@@ -367,7 +374,9 @@ async function exportPredefines(): Promise<void> {
       {
         shouldStop: () => disposed,
         onProgress: (t: ExportTask) => {
-          exportProgressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+          // 预置名单导出是分页累积的，**有**真百分比（已处理 N / M（x%））；
+          // 文案只有 `describeExportProgress` 一处实现（债 23）。
+          exportProgressText.value = describeExportProgress(t)
         }
       }
     )

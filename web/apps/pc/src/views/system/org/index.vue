@@ -3,7 +3,14 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TreeInstance } from 'element-plus'
 
-import { describeTruncation, exportTaskApi, organizationImportApi, orgApi, saveBlob } from '@/api'
+import {
+  describeExportProgress,
+  describeTruncation,
+  exportTaskApi,
+  organizationImportApi,
+  orgApi,
+  saveBlob
+} from '@/api'
 import type {
   ExportTask,
   ImportColumn,
@@ -633,7 +640,7 @@ onUnmounted(() => {
 })
 
 const exporting = ref(false)
-/** 任务的真实阶段（排队中 / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
+/** 任务的真实阶段（排队中 / 已处理 N / M（x%） / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
 const exportProgressText = ref('')
 
 const exportVisible = ref(false)
@@ -676,7 +683,9 @@ async function submitExport(orgQuery: OrgQuery): Promise<void> {
       {
         shouldStop: () => disposed,
         onProgress: (t: ExportTask) => {
-          exportProgressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+          // 文案只有 `describeExportProgress` 一处实现：组织导出结构上给不出百分比
+          // （一次性序列化），它会如实退回"正在生成…"而不是显示卡住的 0%。
+          exportProgressText.value = describeExportProgress(t)
         }
       }
     )
@@ -1200,7 +1209,7 @@ onMounted(() => {
   margin-bottom: 12px;
 }
 
-/* 导出任务的进行状态（排队中 / 正在生成） */
+/* 导出任务的进行状态（排队中 / 已处理 N / M（x%） / 正在生成） */
 .org__progress {
   margin-bottom: 12px;
   font-size: 12px;

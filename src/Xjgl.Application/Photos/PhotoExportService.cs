@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
+using Xjgl.Exporting;
 using Xjgl.Photos.Dtos;
 using Xjgl.Text;
 
@@ -93,6 +94,18 @@ public class PhotoExportService : IPhotoExportService, ITransientDependency
         var photoCount = 0;
         var skippedCount = 0;
 
+        // ★ 债 23：这一种的中间进度是**真的**，"读一张 → 写一张"天然就是分片产出。
+        //
+        // 这里踩过一个坑值得记下来：`ExportProgress.ReportAsync` 只接受"知道总数"的
+        // 上报，而照片这一条的总数来自 `LoadRowsAsync`，它自己就是持续翻页直到取够
+        // `MaxCount` 或数据耗尽 —— 于是**取数阶段没有任何可见进度**（那一段在
+        // "台账里几万条、可导出的只有几百张"时反而是最慢的）。
+        // 这不是可以糊过去的地方：取数阶段只能如实显示"正在生成…"，
+        // 因为此刻连"总共要打包多少张"都还不确定 —— 一个靠猜的分母会给出一条
+        // 稳定骗人的进度条（估小了会超过 100%，估大了永远走不到头）。
+        // 真正开始打包之后，分母是确定的（`rows.Count`），进度也就是真的。
+        var totalPhotos = rows.Count;
+
         // leaveOpen: true —— 流的生命周期归调用方（它可能是临时文件或存储写入流），
         // 这里只负责把 zip 写完，不去关别人的流。
         using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
@@ -109,6 +122,11 @@ public class PhotoExportService : IPhotoExportService, ITransientDependency
                     skippedCount++;
                     manifest.Add(ManifestRow(row, null, "文件缺失（台账有记录但存储里读不到）"));
 
+                    // 读不到的那张**也是"处理过"的一张**：它同样花掉了这一次导出的时间，
+                    // 不计进去的话，一大批文件缺失的照片会让进度条停在 60% 再也不动。
+                    await ExportProgress.ReportAsync(
+                        skippedCount + photoCount, totalPhotos, cancellationToken);
+
                     continue;
                 }
 
@@ -124,6 +142,11 @@ public class PhotoExportService : IPhotoExportService, ITransientDependency
                 photoCount++;
 
                 manifest.Add(ManifestRow(row, entryName, null));
+
+                // 逐张上报，但**落库是节流的**（见 ThrottledExportProgressSink）：
+                // 500 张若真写 500 次 UPDATE，库会被打满，而且比读图本身还慢。
+                // 这里只管如实报数，"多久写一次"是那一个类的事。
+                await ExportProgress.ReportAsync(photoCount + skippedCount, totalPhotos, cancellationToken);
             }
 
             await WriteTextEntryAsync(zip, "照片清单.csv", Csv.WriteForExcel(manifest), cancellationToken);

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   changeFlowApi,
   changeTypeApi,
+  describeExportProgress,
   describeTruncation,
   exportTaskApi,
   orgApi,
@@ -116,6 +117,30 @@ const studentKeyword = ref('')
 const studentOptions = ref<StudentListItem[]>([])
 const searchingStudent = ref(false)
 
+/**
+ * 学生搜索一次最多渲染多少条（债 30 / 前端规约 12.2）。
+ *
+ * 学生是**无边界集合**（全省几十万条），不可能整体塞进下拉；而它又不像组织树
+ * 那样有"整棵树可以虚拟滚动"，所以这里只能走规约许可的第二条路：
+ * **关键字服务端检索 + 硬上限**。上限本身不是码值，写常量即可。
+ */
+const STUDENT_PAGE_SIZE = 20
+
+/** 命中总数 > 渲染条数（即结果被上限截断）：必须在界面上说出来，见 searchStudents。 */
+const studentTruncated = ref(false)
+
+/**
+ * 已选中的学生。
+ *
+ * 【为什么要把选中项单独留住】
+ *   这个下拉是"先按关键字检索、再从结果里挑一个"：每搜一次，选项列表就被整批换掉。
+ *   而 `el-select` 找不到选项时会**直接显示绑定值（一个 Guid）** ——
+ *   界面上会突然出现一串 36 位十六进制，没人看得出那就是"已经选中的学生"。
+ *   因此每次结果回来都把选中项并回列表（与 components/PermissionDelegationDialog.vue
+ *   的 selectedUser 是同一个处理）。
+ */
+const selectedStudent = ref<StudentListItem | null>(null)
+
 const submitForm = reactive({
   changeTypeId: undefined as string | undefined,
   studentId: undefined as string | undefined,
@@ -134,6 +159,15 @@ const selectedType = computed(() =>
 /** 只有"允许跨校"的异动类型才需要选目标学校。 */
 const needTargetSchool = computed(() => selectedType.value?.allowCrossSchool ?? false)
 
+/**
+ * 按关键字向后端要一页学生（**不做全量下拉**，见 STUDENT_PAGE_SIZE 的说明）。
+ *
+ * 【为什么限了 20 条就必须在界面上说一句】
+ *   命中的学生可能远多于 20 条（例如只输入一个"王"）。静默截断会让老师
+ *   得出"系统里没有这个学生"的错误结论 —— 与 H5 `views/change/apply.vue`
+ *   同一条口径：**只要限了条数，界面就必须说出来**，所以下面用
+ *   `totalCount`（命中总数）与 `items.length`（渲染条数）比对来点亮提示。
+ */
 async function searchStudents(): Promise<void> {
   if (!studentKeyword.value.trim()) {
     ElMessage.warning('请输入学籍辅号或姓名。')
@@ -146,14 +180,32 @@ async function searchStudents(): Promise<void> {
   try {
     const result = await studentApi.getList({
       keyword: studentKeyword.value.trim(),
-      maxResultCount: 20,
+      maxResultCount: STUDENT_PAGE_SIZE,
       sorting: 'StudentNo ASC'
     })
 
-    studentOptions.value = result.items
+    const found = result.items ?? []
+
+    // 截断判定只能用**服务端返回的条数**：算上下面并回来的"上次选中项"，
+    // 会在"刚好只多一条"时把提示吞掉 —— 那就又变成静默截断了
+    studentTruncated.value = result.totalCount > found.length
+
+    const items = [...found]
+    const selected = selectedStudent.value
+
+    if (selected && !items.some((s) => s.id === selected.id)) {
+      items.unshift(selected)
+    }
+
+    studentOptions.value = items
   } finally {
     searchingStudent.value = false
   }
+}
+
+/** 选中项变化时记住它（见 selectedStudent 的说明）。 */
+function rememberStudent(id: string): void {
+  selectedStudent.value = studentOptions.value.find((s) => s.id === id) ?? null
 }
 
 function openSubmit(): void {
@@ -164,6 +216,8 @@ function openSubmit(): void {
   submitForm.remark = ''
   studentKeyword.value = ''
   studentOptions.value = []
+  studentTruncated.value = false
+  selectedStudent.value = null
   submitVisible.value = true
 }
 
@@ -291,7 +345,9 @@ async function exportApplies(): Promise<void> {
       {
         shouldStop: () => disposed,
         onProgress: (t: ExportTask) => {
-          progressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+          // 异动申请导出是分页累积的，**有**真百分比（已处理 N / M（x%））；
+          // 文案只有 `describeExportProgress` 一处实现（债 23）。
+          progressText.value = describeExportProgress(t)
         }
       }
     )
@@ -507,7 +563,13 @@ onMounted(async () => {
               @keyup.enter="searchStudents"
             />
             <el-button :loading="searchingStudent" @click="searchStudents">查找</el-button>
-            <el-select v-model="submitForm.studentId" placeholder="选择学生" filterable style="width: 240px">
+            <el-select
+              v-model="submitForm.studentId"
+              placeholder="选择学生"
+              filterable
+              style="width: 240px"
+              @change="rememberStudent"
+            >
               <el-option
                 v-for="s in studentOptions"
                 :key="s.id"
@@ -515,6 +577,11 @@ onMounted(async () => {
                 :value="s.id"
               />
             </el-select>
+          </div>
+
+          <!-- 限了条数就必须说出来：静默截断会让人以为"系统里没有这个学生" -->
+          <div v-if="studentTruncated" class="chg-apply__truncated">
+            结果较多，请继续输入以缩小范围。
           </div>
         </el-form-item>
 
@@ -578,6 +645,15 @@ onMounted(async () => {
 
 .chg-apply__hint {
   color: var(--el-color-danger);
+  font-size: 12px;
+}
+
+/*
+ * 「结果较多」用警告色而不是危险色：它不是错误（列表仍然可用），
+ * 但它必须比普通灰色说明更显眼 —— 漏看它就会得出"查无此人"的错误结论。
+ */
+.chg-apply__truncated {
+  color: var(--el-color-warning);
   font-size: 12px;
 }
 

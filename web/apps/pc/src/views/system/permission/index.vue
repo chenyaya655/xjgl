@@ -38,6 +38,40 @@ const groups = ref<PermissionGroup[]>([])
 const entityDisplayName = ref('')
 
 /**
+ * 「授权对象 = 用户」时一次最多渲染多少条（债 30 / 前端规约 12.2）。
+ *
+ * 用户（教师账号）是**无边界集合**，动辄上万条：普通 `el-select` 会为每一条
+ * 渲染一个真实 DOM，打开一次下拉就把主线程卡死（详见 16.13 的实测）。
+ * 规约给了两条许可做法，这里选**关键字服务端检索 + 结果上限** ——
+ * 授权对象永远是"某一个人"，比在几万条里滚动更直接。
+ * 上限不是码值，写常量即可。
+ */
+const USER_SEARCH_LIMIT = 30
+
+/**
+ * 命中总数 > 渲染条数（被上限截断）：必须明确提示，不能静默截断。
+ *
+ * 【为什么这一句是必需的】
+ *   输入一个"张"可能命中几百个账号。静默只显示 30 条，管理员会得出
+ *   "系统里没有这个账号"的错误结论，然后去建一个重复账号。
+ *   同一条口径见 H5 `views/change/apply.vue` 与
+ *   `components/PermissionDelegationDialog.vue`。
+ */
+const usersTruncated = ref(false)
+
+/**
+ * 已选中的授权对象（用户）。
+ *
+ * 【为什么要把选中项单独留住】
+ *   用户下拉是**远程搜索**：每敲一个关键词，选项列表就被整批换掉。
+ *   选完再敲一次关键词时，选中的那条会从列表里消失，而 `el-select`
+ *   找不到选项时就**直接显示绑定值（一个 Guid）**—— 界面上突然出现一串
+ *   36 位十六进制。因此每次结果回来都把选中项并回去
+ *   （与 `components/PermissionDelegationDialog.vue` 的 selectedUser 同一处理）。
+ */
+const selectedUser = ref<IdentityUser | null>(null)
+
+/**
  * 角色下拉加载失败的原因（非空时显示明确提示，而不是静默留空）。
  *
  * 【为什么必须显式记录 —— 实测踩过】
@@ -141,6 +175,11 @@ async function loadPermissions(): Promise<void> {
 function onProviderChanged(): void {
   providerKey.value = ''
 
+  // 换了授权对象类型，就不要再记住上一个人：否则下次搜索会把一个
+  // "当前并未选中"的账号并回列表顶部（见 selectedUser 的说明）
+  selectedUser.value = null
+  usersTruncated.value = false
+
   if (providerName.value === 'R' && roles.value.length > 0) {
     providerKey.value = roles.value[0].name
   }
@@ -236,8 +275,32 @@ async function searchUsers(text: string): Promise<void> {
     return
   }
 
-  const result = await identityApi.getUsers({ filter: text, maxResultCount: 30 })
-  users.value = result.items
+  const result = await identityApi.getUsers({ filter: text, maxResultCount: USER_SEARCH_LIMIT })
+  const found = result.items ?? []
+
+  // 截断判定只能用**服务端返回的条数**：算上下面并回来的"上次选中项"，
+  // 会在"刚好只多一条"时把提示吞掉 —— 那就又变成静默截断了
+  usersTruncated.value = result.totalCount > found.length
+
+  const items = [...found]
+  const selected = selectedUser.value
+
+  if (selected && !items.some((u) => u.id === selected.id)) {
+    items.unshift(selected)
+  }
+
+  users.value = items
+}
+
+/** 选中项变化时记住它（见 selectedUser 的说明）。 */
+function rememberUser(id: string): void {
+  selectedUser.value = users.value.find((u) => u.id === id) ?? null
+}
+
+/** 选完人：先记住他（否则再搜一次下拉会显示成 Guid），再加载他的权限。 */
+function pickUser(id: string): void {
+  rememberUser(id)
+  void loadPermissions()
 }
 </script>
 
@@ -271,7 +334,7 @@ async function searchUsers(text: string): Promise<void> {
             remote
             :remote-method="searchUsers"
             style="width: 240px"
-            @change="loadPermissions"
+            @change="pickUser"
           >
             <el-option
               v-for="u in users"
@@ -280,6 +343,11 @@ async function searchUsers(text: string): Promise<void> {
               :value="u.id"
             />
           </el-select>
+
+          <!-- 限了条数就必须说出来：静默截断会让人以为"系统里没有这个账号" -->
+          <div v-if="providerName === 'U' && usersTruncated" class="perm__truncated">
+            结果较多，请继续输入以缩小范围。
+          </div>
         </el-form-item>
 
         <el-form-item label="搜索权限">
@@ -404,6 +472,16 @@ async function searchUsers(text: string): Promise<void> {
 
 .perm__cb {
   margin-left: 12px;
+}
+
+/*
+ * 「结果较多」必须整行显示、并用警告色：inline 表单里它默认会挤在下拉框
+ * 右边被忽略，而漏看这一句的后果是"以为系统里没有这个账号"（见 usersTruncated）。
+ */
+.perm__truncated {
+  flex-basis: 100%;
+  color: var(--el-color-warning);
+  font-size: 12px;
 }
 
 .perm__header {

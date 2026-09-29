@@ -2,7 +2,14 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { codeApi, codeImportApi, describeTruncation, exportTaskApi, saveBlob } from '@/api'
+import {
+  codeApi,
+  codeImportApi,
+  describeExportProgress,
+  describeTruncation,
+  exportTaskApi,
+  saveBlob
+} from '@/api'
 import type {
   CodeCategory,
   CodeExportQuery,
@@ -457,7 +464,7 @@ onUnmounted(() => {
 })
 
 const exporting = ref(false)
-/** 任务的真实阶段（排队中 / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
+/** 任务的真实阶段（排队中 / 已处理 N / M（x%） / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
 const exportProgressText = ref('')
 
 const exportVisible = ref(false)
@@ -527,7 +534,9 @@ async function submitExport(codeQuery: CodeExportQuery): Promise<void> {
       {
         shouldStop: () => disposed,
         onProgress: (t: ExportTask) => {
-          exportProgressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+          // 微代码导出结构上给不出百分比（一次性序列化），`describeExportProgress`
+          // 会如实退回"正在生成…"而不是显示一个卡在 0% 的进度。
+          exportProgressText.value = describeExportProgress(t)
         }
       }
     )
@@ -1047,7 +1056,7 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 
-/* 导出任务的进行状态（排队中 / 正在生成） */
+/* 导出任务的进行状态（排队中 / 已处理 N / M（x%） / 正在生成） */
 .code__progress {
   margin-bottom: 12px;
   font-size: 12px;

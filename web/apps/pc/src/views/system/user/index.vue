@@ -2,7 +2,15 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { describeError, describeTruncation, exportTaskApi, identityApi, isJsonParseError, saveBlob } from '@/api'
+import {
+  describeError,
+  describeExportProgress,
+  describeTruncation,
+  exportTaskApi,
+  identityApi,
+  isJsonParseError,
+  saveBlob
+} from '@/api'
 import type { ExportTask, IdentityRole, IdentityUser } from '@/api/types'
 import { ExportTaskKinds } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
@@ -281,7 +289,7 @@ onUnmounted(() => {
 })
 
 const exporting = ref(false)
-/** 任务的真实阶段（排队中 / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
+/** 任务的真实阶段（排队中 / 已处理 N / M（x%） / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
 const exportProgressText = ref('')
 
 /**
@@ -302,7 +310,9 @@ async function exportUsers(): Promise<void> {
       {
         shouldStop: () => disposed,
         onProgress: (t: ExportTask) => {
-          exportProgressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+          // 账号清单导出是分页累积的，**有**真百分比（已处理 N / M（x%））；
+          // 文案只有 `describeExportProgress` 一处实现（债 23）。
+          exportProgressText.value = describeExportProgress(t)
         }
       }
     )

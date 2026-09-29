@@ -2,8 +2,18 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { exportTaskApi, orgApi, photoApi, saveBlob, describeTruncation, studentApi, PhotoStatuses } from '@/api'
+import {
+  exportTaskApi,
+  orgApi,
+  photoApi,
+  saveBlob,
+  describeExportProgress,
+  describeTruncation,
+  studentApi,
+  PhotoStatuses
+} from '@/api'
 import type {
+  ExportTask,
   MissingPhotoStudent,
   OrgDto,
   PhotoDto,
@@ -53,6 +63,17 @@ const canExport = computed(() => auth.can(MetadataPermissions.Pho.Photo.Export))
 
 const exportDialogVisible = ref(false)
 const exporting = ref(false)
+
+/**
+ * 打包任务的进行状态（排队中 / 已处理 N / M（x%） / 正在生成）。
+ *
+ * 照片导出是**最需要**这一行字的入口：它要逐张读上千个文件再压缩，
+ * 几十秒是常态，而原来这里只有一个转圈的按钮 —— 用户完全看不出
+ * "在读第 300 张"还是"卡死了"，于是关掉重来（那一次的文件已经白读了）。
+ * 文案走与其它七个入口共用的 `describeExportProgress`，不在这里另写一份。
+ */
+const exportProgressText = ref('')
+
 const exportOptions = reactive({
   useThumbnail: false,
   includeMissingList: true,
@@ -71,6 +92,7 @@ onUnmounted(() => {
 
 async function exportPhotos(): Promise<void> {
   exporting.value = true
+  exportProgressText.value = '排队中…'
 
   try {
     // 照片打包要读上千个文件再压缩，同步做会把请求线程占满、zip 还全在内存里。
@@ -86,7 +108,12 @@ async function exportPhotos(): Promise<void> {
           maxCount: exportOptions.maxCount
         }
       },
-      { shouldStop: () => disposed }
+      {
+        shouldStop: () => disposed,
+        onProgress: (t: ExportTask) => {
+          exportProgressText.value = describeExportProgress(t)
+        }
+      }
     )
 
     saveBlob(await exportTaskApi.download(task.id), task.fileName || `学生照片_${new Date().toISOString().slice(0, 10)}.zip`)
@@ -106,6 +133,8 @@ async function exportPhotos(): Promise<void> {
     ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
   } finally {
     exporting.value = false
+    // 对话框可能还开着（失败时），清掉进度文字，免得停在"已处理 320 / 500"上
+    exportProgressText.value = ''
   }
 }
 const canCompensate = computed(() => auth.can(MetadataPermissions.Pho.Photo.Compensate))
@@ -761,7 +790,8 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="exportDialogVisible" title="导出照片" width="560px">      <el-alert type="info" :closable="false" class="photo-list__export-tip">
+    <el-dialog v-model="exportDialogVisible" title="导出照片" width="560px">
+      <el-alert type="info" :closable="false" class="photo-list__export-tip">
         导出范围与当前台账筛选一致（关键字：{{ ledgerQuery.keyword || '不限' }}，
         状态：{{ statusOptions.find((s) => s.value === ledgerQuery.status)?.label ?? '全部' }}）。
         压缩包内含「照片清单.csv」，读不到的照片会明确标注为「文件缺失」。
@@ -786,6 +816,10 @@ onMounted(async () => {
       </el-form>
 
       <template #footer>
+        <!-- 进度只在真的在跑的时候出现：平时留一个空行会让对话框高度跳动 -->
+        <span v-if="exportProgressText" class="photo-list__export-progress">
+          {{ exportProgressText }}
+        </span>
         <el-button @click="exportDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="exporting" @click="exportPhotos">开始导出</el-button>
       </template>
@@ -1002,6 +1036,19 @@ onMounted(async () => {
   margin-left: 10px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+/*
+  进度文案放在 footer 里，但视觉上要**靠左**：Element Plus 的 footer 默认把内容
+  右对齐（跟按钮一起），进度跟着按钮挤在右边会与"取消/开始导出"混成一团。
+  用 float 而不是改 footer 的 flex：那个对齐是 el-dialog 全局的，
+  在这里覆盖会连带影响同页其它对话框。
+*/
+.photo-list__export-progress {
+  float: left;
+  line-height: 32px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 .photo-ledger__thumb {
   width: 44px;

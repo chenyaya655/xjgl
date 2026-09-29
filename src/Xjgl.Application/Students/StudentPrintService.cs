@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Volo.Abp;
 using Volo.Abp.DependencyInjection;
@@ -5,6 +6,7 @@ using Volo.Abp.Timing;
 using Volo.Abp.Users;
 using Xjgl.Codes;
 using Xjgl.Data;
+using Xjgl.Exporting;
 using Xjgl.Organizations;
 using Xjgl.Photos;
 using Xjgl.Printing;
@@ -43,6 +45,7 @@ public class StudentPrintService : IStudentPrintService, ITransientDependency
     private readonly LocalFallbackPhotoStorage _fallbackPhotos;
     private readonly IStudentCardPdfRenderer _cardRenderer;
     private readonly IStudentRosterPdfRenderer _rosterRenderer;
+    private readonly IConfiguration _configuration;
     private readonly IClock _clock;
     private readonly ICurrentUser _currentUser;
     private readonly ILogger<StudentPrintService> _logger;
@@ -60,6 +63,7 @@ public class StudentPrintService : IStudentPrintService, ITransientDependency
         LocalFallbackPhotoStorage fallbackPhotos,
         IStudentCardPdfRenderer cardRenderer,
         IStudentRosterPdfRenderer rosterRenderer,
+        IConfiguration configuration,
         IClock clock,
         ICurrentUser currentUser,
         ILogger<StudentPrintService> logger)
@@ -76,6 +80,7 @@ public class StudentPrintService : IStudentPrintService, ITransientDependency
         _fallbackPhotos = fallbackPhotos;
         _cardRenderer = cardRenderer;
         _rosterRenderer = rosterRenderer;
+        _configuration = configuration;
         _clock = clock;
         _currentUser = currentUser;
         _logger = logger;
@@ -172,7 +177,11 @@ public class StudentPrintService : IStudentPrintService, ITransientDependency
         // 花名册不能另起一套查询，否则会出现"界面看不到、打印却打得出"
         var rows = new List<StudentListItemDto>();
 
-        for (var skip = 0; skip < input.MaxRows; skip += PageSize)
+        var configuredPageSize = _configuration.GetValue<int?>(PageSizeConfigKey) ?? DefaultPageSize;
+
+        var pageSize = Math.Clamp(configuredPageSize < 1 ? DefaultPageSize : configuredPageSize, 1, 1000);
+
+        for (var skip = 0; skip < input.MaxRows; skip += pageSize)
         {
             var page = await _students.GetListAsync(new StudentQueryDto
             {
@@ -185,12 +194,23 @@ public class StudentPrintService : IStudentPrintService, ITransientDependency
                 Keyword = input.Keyword,
                 Sorting = input.Sorting ?? "StudentNo ASC",
                 SkipCount = skip,
-                MaxResultCount = Math.Min(PageSize, input.MaxRows - skip)
+                MaxResultCount = Math.Min(pageSize, input.MaxRows - skip)
             });
 
             rows.AddRange(page.Items);
 
-            if (page.Items.Count < PageSize || rows.Count >= page.TotalCount)
+            // ★ 债 23：花名册是**分页取数**的，所以"取完第 N 页"就是一个真实的中间进度。
+            //
+            // 注意分母用 `input.MaxRows` 而不是 `page.TotalCount`：这一种同样有上限
+            // （`MaxRows`，默认 2000），而它的循环条件本身就是"取满 MaxRows 就停"。
+            // 用原总数的话，2000 人以上的花名册进度会永远停在某个百分比上 ——
+            // 那正是"看起来卡住了"，比没有百分比更难解释。
+            await ExportProgress.ReportAsync(
+                rows.Count,
+                Math.Min(page.TotalCount, input.MaxRows),
+                cancellationToken);
+
+            if (page.Items.Count < pageSize || rows.Count >= page.TotalCount)
             {
                 break;
             }
@@ -227,8 +247,18 @@ public class StudentPrintService : IStudentPrintService, ITransientDependency
     // 内部
     // ------------------------------------------------------------------
 
-    /// <summary>单次取数上限（ABP 对 MaxResultCount 有 1000 的硬上限，超过会被参数校验拒绝）。</summary>
-    private const int PageSize = 1000;
+    /// <summary>
+    /// 单次取数上限（ABP 对 MaxResultCount 有 1000 的硬上限，超过会被参数校验拒绝）。
+    ///
+    /// 与 `StudentCsvExportBuilder` / `PhotoExportService` 一样做成**可配置**，
+    /// 理由也相同：花名册的"每页之后上报一次进度"（债 23）只有跨页才谈得上，
+    /// 而用 1000 的页大小意味着集成测试要往共享测试库里插 1000+ 名学生
+    /// （实测 30 秒上下，还每跑一次多留一批垃圾）。默认值就是那个硬上限，
+    /// 生产上不需要改。
+    /// </summary>
+    private const string PageSizeConfigKey = "Xjgl:Print:RosterPageSize";
+
+    private const int DefaultPageSize = 1000;
 
     private async Task<List<StudentCardGuardian>> LoadGuardiansAsync(
         Guid studentId,

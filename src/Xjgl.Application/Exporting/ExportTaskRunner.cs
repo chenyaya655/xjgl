@@ -34,6 +34,8 @@ public sealed record ExportTaskRunResult(
 ///
 /// **本类不写数据库**：产物落盘后就返回，状态流转全部交给 worker 一处完成。
 /// 两处都写状态的话，"谁最后写的"取决于代码顺序，排查时极难复原。
+/// （唯一的例外是**进度**：它由生成器经 <see cref="ExportProgress"/> 分片上报，
+///   因为只有生成器自己知道"已经产出到第几条"。见债 23。）
 /// </summary>
 public interface IExportTaskRunner
 {
@@ -91,6 +93,32 @@ public class ExportTaskRunner : IExportTaskRunner, ITransientDependency
     {
         Check.NotNull(task, nameof(task));
 
+        // ★ 债 23：哪些种类能给出**真**百分比，哪些不能 —— 这份名单是刻意的，不是遗漏。
+        //
+        // 【能给的】产出过程本身就是分片的，分母在过程中可以确定：
+        //   · StudentCsv / ChangeApplyCsv / ChangeAuditCsv / UserCsv / UserProvisionCsv
+        //     —— 分页累积，每页 1000 行上报一次（见各自的 builder）；
+        //   · StudentRosterPdf —— 花名册也是分页取数，每页上报一次（见 StudentPrintService）；
+        //   · PhotoZip —— 逐张读文件写进压缩包，每处理一张报一次（见 PhotoExportService）。
+        //   上面每一处的分母都取 `min(总数, 该种类的上限)`：
+        //   这一批种类全都会因 `MaxRows` / `MaxRows` / `MaxCount` 截断，若拿"符合条件的
+        //   总数"当分母，截断场景下进度会**永远差最后几个百分点**（看着像卡住）。
+        //   用"本次真的会写出去的行数"当分母，`Processed <= Total` 与
+        //   "跑完时 Processed == RowCount"两条都天然成立。
+        //
+        // 【给不了的 —— 结构上给不出，不是没做】
+        //   · OrganizationCsv：一次 `GetSortedListAsync` 把全量组织取回内存，
+        //     再当场 `Csv.WriteForExcel` 一次成形。中间没有任何"已经产出多少"的概念。
+        //   · CodeCsv：同理，它甚至没有一条"总数已知"的取数语句 ——
+        //     条数是按类别逐个累加出来的，累加完也就写完了。
+        //   · StudentCardPdf：产物是**一张**卡片（Total 恒为 1），
+        //     报"已处理 1 / 共 1"只是在任务结束时补一句废话。
+        //   这三种的界面会如实显示"正在生成…"（前端 `describeExportProgress` 在
+        //   `total == 0` 时回退到文案，不显示 0% —— 见该函数的注释）。
+        //
+        // ⚠ **绝不**用"按已用时间估算百分比"来给上面这三种凑一个数字。
+        //   估算出来的百分比在任务比预期慢时稳定地骗人（显示 90% 卡十分钟），
+        //   比诚实地没有百分比糟糕得多。
         return task.Kind switch
         {
             ExportTaskKinds.StudentCsv => await RunStudentCsvAsync(task, cancellationToken),

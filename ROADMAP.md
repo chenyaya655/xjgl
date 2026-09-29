@@ -65,6 +65,12 @@
 **✅ 已完成**（导出/打印四种产物均已后台化；照片打包也已改为经临时文件流式写，
 落地方式与证据见文末[「已完成」](#六已完成本轮从清单中移出)第 5 条）。
 
+> 后台化的**后续**——"真进度百分比"（原总体方案 §16.14 债 23）也已完成：
+> 分片产出的种类每页/每张上报 `Processed`/`Total`，前端显示
+> `已处理 3,000 / 12,000（25%）`；给不出中间进度的种类（组织、微代码、学籍卡）
+> **如实**显示"正在生成…"而不是编一个按时间估算的百分比。
+> 证据见文末[「已完成」](#六已完成本轮从清单中移出)第 23 条。
+
 ---
 
 ### 6. 生产量级压测 🟡 ★★
@@ -509,6 +515,7 @@ CSV 第一行就是「身份证号已掩码，本文件不能用于回导」的�
 | 7 | 限流的全局限流精度 🟡 ★ | `RedisLuaTokenBucketRateLimiter` 把"读-算-写"放进一段 Lua 脚本、在 Redis 里单线程原子执行，多副本不再被放大；时间基准取 Redis 的 `TIME`（消除各实例时钟偏移）；Redis 不可用时降级回原实现而不是放行。顺带把维度从"只有用户"扩到 **user / ip / global**，并把策略值挪到 `Xjgl:RateLimit:*` 配置：`src/Xjgl.HttpApi.Host/RateLimiting/RedisLuaTokenBucketRateLimiter.cs`、`src/Xjgl.Application/RateLimiting/RateLimitPolicyProvider.cs` |
 | 8 | 老照片缩略图回填 🟢 ★ | `PhotoThumbnailService` + `PhotoThumbnailWorker` 周期按 `ThumbnailPath is null` 扫描补生成，与上传路径**共用同一段生成逻辑**（不是两套实现）：`src/Xjgl.Application/Photos/PhotoThumbnailService.cs`、`src/Xjgl.HttpApi.Host/Photos/PhotoThumbnailWorker.cs` |
 | 13 | 测试库清理机制 🟢 ★★ | `tools/reset-test-db.mjs`：**默认 dry-run**，`--yes` 才真的执行；库名不匹配 `/test/i` 直接拒绝（`--allow-any-database` 才能对别的库动手，且自己承担后果）；`DROP DATABASE ... WITH (FORCE)`；自动在 `PATH` 或 `.tools/pgsql-extract/pgsql/bin/` 里找 `psql`；连接串默认值与 `test/Xjgl.TestBase/XjglTestConfiguration.cs` 保持一致。脚本头部解释了"库越跑越大 → 依赖库里有数据的断言慢慢失真 → 偶发失败本质是残留数据"，也写明**CI 每轮本来就是干净库**，所以这是本机才有的问题 |
+| 23 | 导出/打印的**真进度百分比** 🟢 ★★ | 生成器在分片产出时如实上报"已处理 / 总数"（`ExportProgress` 环境式上报，生成器不必知道自己在给哪个任务干活）；**能给出真百分比**的是分页累积的 CSV（学生 / 异动申请 / 异动审核 / 账号 / 预置名单）、分页取数的花名册、逐张写包的照片 zip；**结构上给不出**的是组织与微代码（一次取数 + 一次性序列化）与学籍卡（产物只有一张）——这三种如实显示"正在生成…"，**不显示卡住的 0%**，也**不做"按已用时间估算"**（那种数字会在任务比预期慢时稳定骗人）。落库经 `ThrottledExportProgressSink` 节流（默认"≥ 2 秒 **且** ≥ 1000 条"，可配 `Xjgl:Export:Progress:*`），只写 `Processed`/`Total` 两列（`IXjglRepository.UpdateColumnsAsync`，不整行覆盖），**不加库表字段**。前端只有一处文案实现 `describeExportProgress`（`web/packages/api/src/progress.ts`），八个导出入口 + 任务中心对话框共用。回归测试：`test/Xjgl.Application.Tests/Exporting/StudentCsvExportProgressTests.cs`、`web/apps/pc/src/utils/exportProgress.test.ts` |
 
 > 移出的判据只有一个：**代码里真的有这条链路，并且指得出文件**。
 > 只有配置项、只在文档里写过、或者只有注释的，一律不算完成。

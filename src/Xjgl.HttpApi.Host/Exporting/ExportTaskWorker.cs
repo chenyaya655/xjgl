@@ -186,6 +186,7 @@ public class ExportTaskWorker : BackgroundService
         var provider = scope.ServiceProvider;
         var repository = provider.GetRequiredService<IXjglRepository<SysExportTask>>();
         var runner = provider.GetRequiredService<IExportTaskRunner>();
+        var progress = provider.GetRequiredService<ExportProgressActivator>();
         var principalAccessor = provider.GetRequiredService<ICurrentPrincipalAccessor>();
         var clock = provider.GetRequiredService<IClock>();
 
@@ -205,7 +206,22 @@ public class ExportTaskWorker : BackgroundService
             // 冒充发起人：这一段之内的 ICurrentUser / 数据范围都按发起人算
             using (principalAccessor.Change(principal))
             {
-                result = await runner.RunAsync(task, stoppingToken);
+                // ★ 债 23：圈定"接下来这一段产出的进度算在这个任务头上"。
+                //
+                // 为什么必须有这一圈（而不是让生成器直接写库）：
+                //   生成器根本不知道自己在给哪个任务干活 —— 它连"有没有任务"都不知道
+                //   （同一个 builder 也被同步调用方/单测用）。所以由"唯一知道任务是谁"的
+                //   worker 把范围圈出来，生成器只管按页报"已经攒到多少"。
+                //   而"报出来的数什么时候真写一次库"是另一层的事（节流），
+                //   见 ThrottledExportProgressSink 的类注释。
+                //
+                // 范围只圈在 RunAsync 外面这一层：任务结束后的状态回写（Succeeded/Failed）
+                // 必须写在范围之外，否则"进度"和"终态"两处都写同一张表、先后关系会变得
+                // 依赖于代码顺序 —— 那正是本类刻意要避免的（见 ExportTaskRunner 的注释）。
+                using (progress.Activate(task.Id))
+                {
+                    result = await runner.RunAsync(task, stoppingToken);
+                }
             }
 
             task.Status = ExportTaskStatuses.Succeeded;

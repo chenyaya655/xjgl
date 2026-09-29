@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Volo.Abp.DependencyInjection;
 using Xjgl.Data;
+using Xjgl.Exporting;
 using Xjgl.Organizations;
 using Xjgl.Text;
 
@@ -103,6 +104,10 @@ public class UserProvisionCsvExportBuilder : IUserProvisionCsvExportBuilder, ITr
 
             total = page.TotalCount;
             items.AddRange(page.Items);
+
+            // ★ 债 23：每取完一页上报一次进度。分母取 `min(总数, 上限)` ——
+            // 这一种会被 `MaxRows` 截断，用原总数会让截断场景下的进度永远差最后几个百分点。
+            await ExportProgress.ReportAsync(items.Count, Math.Min(total, maxRows), cancellationToken);
 
             if (page.Items.Count < take || items.Count >= total)
             {

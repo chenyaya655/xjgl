@@ -74,6 +74,42 @@ public abstract class XjglIntegrationTestBase : AbpIntegratedTest<XjglTestBaseMo
     }
 
     /// <summary>
+    /// 跨轮唯一的数据前缀，用于**不需要通过姓名校验**的地方（学校名、查询关键字等）。
+    ///
+    /// 集成测试打的是**长期累积**的真实测试库（仓库的既有约定，见 ROADMAP 第 8/29 条），
+    /// 所以任何"统计类"的断言（共几条、导出多少行、进度分母是多少）都必须只看到
+    /// **本轮自己造的那批数据**。用固定名字造数据的话，第二轮跑时上一轮留下的记录
+    /// 会让 `total` 变大 —— 表现为用例**偶发**变红，而根因在测试数据、不在被测代码。
+    /// 于是统一给每轮一个随机前缀，所有查询都按它过滤。
+    /// </summary>
+    protected static string NewDataPrefix(string purpose)
+    {
+        return $"{purpose}{Random.Shared.Next(100_000, 999_999)}";
+    }
+
+    /// <summary>
+    /// 跨轮唯一的**学生姓名**前缀（随机数用汉字写出来）。
+    ///
+    /// 【为什么不能直接用 <see cref="NewDataPrefix"/>】
+    ///   学生姓名走的是与手工录入**完全相同**的校验，`RareCharacterText.IsValidPersonName`
+    ///   不接受数字与拉丁字母。用带阿拉伯数字的前缀会在"造数据"这一步就抛
+    ///   ValidationFailed，而报错位置与真正要验的东西看起来毫无关系。
+    ///   用汉字写数字既保住了跨轮唯一（一万种组合），又是合法姓名。
+    /// </summary>
+    protected static string NewNamePrefix(string purpose)
+    {
+        const string digits = "零一二三四五六七八九";
+
+        var n = Random.Shared.Next(1000, 9999);
+
+        return purpose
+               + digits[n / 1000]
+               + digits[n / 100 % 10]
+               + digits[n / 10 % 10]
+               + digits[n % 10];
+    }
+
+    /// <summary>
     /// 撞上「身份证号已存在」时自动换个号重试。
     ///
     /// **不要**为了让用例稳定而放宽断言（比如不再断言查重），

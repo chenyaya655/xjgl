@@ -74,6 +74,23 @@ public static class XjglTestConfiguration
                 // 就多留 1000 条垃圾。把页大小调小，3 条数据就能覆盖同一条路径。
                 ["Xjgl:Photo:ExportPageSize"] = "2",
 
+                // 学生名单导出的取数页大小设为 5（生产默认 1000）。
+                //
+                // 与上面照片导出同一条取舍：要覆盖"每页之后上报一次进度"（债 23）
+                // 就必须跨页，而用 1000 的页大小意味着往共享测试库里插 1000+ 名学生
+                // （实测 30 秒上下）。调小之后 7 条数据就走完同一个循环体。
+                ["Xjgl:Export:StudentCsvPageSize"] = "5",
+
+                // 花名册取数的页大小同样调小（生产默认 1000）。理由与上面两条一致：
+                // 要覆盖"每页之后上报一次进度"就必须跨页，而 1000 的页大小要把
+                // 1000+ 名学生拉进 PDF 渲染 —— 慢得没有道理。
+                ["Xjgl:Print:RosterPageSize"] = "5",
+
+                // ⚠ 进度落库的节流参数（`Xjgl:Export:Progress:*`）**刻意不在这里覆盖**：
+                //   节流规则本身就是要被测的东西（见 ThrottledExportProgressSink 的类注释），
+                //   测试里把它们调小，验的就成了一组生产上根本不存在的参数 ——
+                //   而"调小之后一切正常"完全不能说明生产参数是对的。
+
                 // 熔断参数调小，让测试能在几百毫秒内观察到「熔断→恢复」
                 ["Xjgl:Photo:MinimumSamples"] = "3",
                 ["Xjgl:Photo:FailureRateThreshold"] = "0.5",
