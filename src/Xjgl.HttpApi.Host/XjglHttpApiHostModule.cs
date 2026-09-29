@@ -591,10 +591,21 @@ public class XjglHttpApiHostModule : AbpModule
         app.UseAuthentication();
         app.UseAbpOpenIddictValidation();
 
+        // ⚠ `MultiTenancyConsts.IsEnabled` 是**编译期常量 false**（本系统一省一套，
+        //   多租户是明确的非目标，见 ROADMAP「非目标」一节），因此编译器会判定
+        //   这个 if 的主体是"无法访问的代码"并给出 CS0162。
+        //
+        //   这里**保留这个调用**是有意的：ABP 的官方装配骨架里就有它，
+        //   留着能让"要不要开多租户"这件事保持一行开关的形状（改常量即可），
+        //   而不是让下一个人去猜"是不是漏了 UseMultiTenancy"。
+        //   用局部 pragma 把那一条警告消掉 —— 它的信息量是零，但会混进
+        //   构建输出里，让真正需要看的警告更难被看见。
+#pragma warning disable CS0162 // 无法访问的代码：多租户在编译期常量上被有意关闭
         if (MultiTenancyConsts.IsEnabled)
         {
             app.UseMultiTenancy();
         }
+#pragma warning restore CS0162
 
         app.UseUnitOfWork();
         app.UseDynamicClaims();

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace Xjgl.Text;
@@ -108,8 +109,17 @@ public static class RareCharacterText
     ///
     /// 注意：**不能**用 <c>^[\u4e00-\u9fa5]+$</c> 这类正则校验姓名 ——
     /// 它会把生僻字全部误判为非法。
+    ///
+    /// <paramref name="error"/> 上的 <see cref="NotNullWhenAttribute"/> 不是装饰：
+    /// 调用方几乎都是"校验失败就把这句原因塞进 BusinessException"，例如
+    /// <c>throw new BusinessException(...).WithData("reason", nameError)</c>。
+    /// 没有这个标注时，编译器只能看到 <c>out string?</c>，
+    /// 于是**每一处调用点**都要各写一次空值兜底（本项目原有 12 处 CS8604 警告就来自这里）——
+    /// 而正确的做法是**在一处把契约说清楚**：返回 false 时 error 必然有值。
     /// </summary>
-    public static bool IsValidPersonName(string? value, out string? error)
+    public static bool IsValidPersonName(
+        string? value,
+        [NotNullWhen(false)] out string? error)
     {
         error = null;
 

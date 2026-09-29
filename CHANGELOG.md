@@ -61,6 +61,32 @@
   现象是"弹窗明明关了却一直等不到隐藏"。
   现在改成按可访问名定位：`page.getByRole('dialog', { name: '新建角色' })`。
 
+### 本轮修复：把生产代码的构建警告清到 0
+
+`src/` 下所有项目现在**零警告**。清掉的三类都是**在源头把契约说清楚**，
+不是把警告压掉：
+
+- **`CS8604`（12 处调用点 → 一处标注）**：`RareCharacterText.IsValidPersonName`
+  与 `IdCardValidator.TryNormalize` / `TryParseBirthDate` 的 `out string? error`
+  加上 `[NotNullWhen(false)]` —— 它们本来就保证"返回 false 时 error 有值"，
+  只是没告诉编译器。于是**每一处调用点**原先都得各自兜底一次空值，
+  而这 12 条警告的根因只有一处：契约没写下来。
+- **`CS8619`（2 处）**：`XjglRepository.FindAsync` 直接 `return Task<TEntity>`
+  去填 `Task<TEntity?>`（泛型不变）。改成 `await` 一次，
+  既消掉警告，也让"这里可能为 null"在代码上显式可见 ——
+  这个标注与 SqlSugar 的真实语义（查不到返回 null）是一致的。
+- **`CS0162`（1 处）**：多租户在编译期常量上被有意关闭
+  （`MultiTenancyConsts.IsEnabled = false`），`app.UseMultiTenancy()` 因此
+  是"无法访问的代码"。**保留调用**是有意的（保持一行开关的形状，
+  不让人以为漏了装配），用局部 pragma 消掉那条零信息量的警告。
+
+**还未清的是测试工程的 438 条 `xUnit1051` 与约 20 条 `CS86xx`**，
+两类都只影响测试代码：前者是"测试里应传 `TestContext.Current.CancellationToken`"
+的 xUnit 分析器建议（逐处机械改动，与行为无关），
+后者是 Shouldly 的断言方法没有 `[NotNull]` 标注导致的
+（用例里明明先 `ShouldNotBeNull()` 了，编译器不认）。**刻意没有放宽或屏蔽**，
+免得把真问题一起盖住。
+
 ### 待做
 
 剩下的都是**明确列出来**的，不在代码里藏着：见 [`ROADMAP.md`](ROADMAP.md)。

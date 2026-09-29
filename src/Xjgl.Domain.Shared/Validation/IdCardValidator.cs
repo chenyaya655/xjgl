@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Xjgl.Validation;
 
 /// <summary>
@@ -11,8 +13,15 @@ public static class IdCardValidator
 
     /// <summary>
     /// 校验并规范化为 18 位。15 位老号会被补齐为 18 位。
+    ///
+    /// <paramref name="error"/> 标注了 <see cref="NotNullWhenAttribute"/>：
+    /// 返回 false 时它必然是一句可直接给用户看的原因。调用方（本项目有 3 处）
+    /// 都是"失败就把这句原因塞进 BusinessException"，标注之后无需各自再兜底一次空值。
     /// </summary>
-    public static bool TryNormalize(string? input, out string normalized, out string? error)
+    public static bool TryNormalize(
+        string? input,
+        out string normalized,
+        [NotNullWhen(false)] out string? error)
     {
         normalized = string.Empty;
         error = null;
@@ -130,7 +139,10 @@ public static class IdCardValidator
         return Convert.ToHexString(hmac.ComputeHash(bytes));
     }
 
-    private static bool TryParseBirthDate(string yyyymmdd, out DateOnly birthDate, out string? error)
+    private static bool TryParseBirthDate(
+        string yyyymmdd,
+        out DateOnly birthDate,
+        [NotNullWhen(false)] out string? error)
     {
         birthDate = default;
         error = null;

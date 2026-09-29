@@ -107,9 +107,15 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
                ?? throw new EntityNotFoundException(typeof(TEntity), id);
     }
 
-    public virtual Task<TEntity?> FindAsync(Guid id, CancellationToken cancellationToken = default)
+    public virtual async Task<TEntity?> FindAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        return Queryable.InSingleAsync(id);
+        // 【为什么要 await 而不是直接 return】
+        //   SqlSugar 的 `InSingleAsync` 声明返回 `Task<TEntity>`（非空标注），
+        //   而它的真实语义是"查不到返回 null"。直接 `return Queryable.InSingleAsync(id);`
+        //   是拿 `Task<TEntity>` 去填 `Task<TEntity?>` —— 泛型不变，编译器给 CS8619。
+        //   await 之后拿到的是 `TEntity`，可以隐式转成 `TEntity?`，
+        //   既消掉了警告，也让"这里可能为 null"这件事在代码上显式可见。
+        return await Queryable.InSingleAsync(id);
     }
 
     public virtual async Task<TEntity> GetAsync(
@@ -120,11 +126,12 @@ public class XjglRepository<TEntity> : ISqlSugarRepository<TEntity>
                ?? throw new EntityNotFoundException(typeof(TEntity), "查询条件未命中任何记录");
     }
 
-    public virtual Task<TEntity?> FindAsync(
+    public virtual async Task<TEntity?> FindAsync(
         Expression<Func<TEntity, bool>> predicate,
         CancellationToken cancellationToken = default)
     {
-        return Queryable.Where(predicate).FirstAsync();
+        // 同上面的按 Id 重载：await 一次，让 `TEntity` → `TEntity?` 的转换发生
+        return await Queryable.Where(predicate).FirstAsync();
     }
 
     // ------------------------------------------------------------------
