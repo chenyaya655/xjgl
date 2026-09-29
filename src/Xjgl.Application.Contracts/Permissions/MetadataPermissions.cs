@@ -57,13 +57,24 @@ public static class MetadataPermissions
             public const string Create = "Sys.User.Create";
             public const string Update = "Sys.User.Update";
             public const string Delete = "Sys.User.Delete";
+            public const string Export = "Sys.User.Export";
 
-            // 【这里曾经有 Import / Export 两条权限码，已删除】
-            // 它们被种进元数据、也授给了 admin，但**前后端都没有任何实现**：
-            // 没有接口、没有按钮。后果是权限管理页出现"勾了却不影响任何行为"的权限项 ——
-            // 管理员据此以为可以导入/导出用户，实际点了什么都不会发生。
-            // 本项目的约定是"不做文档/界面上看起来有、实际没做的功能"，
-            // 因此先**撤掉声明**，等功能真的做了再加回来（见 ROADMAP「用户导入导出」）。
+            // 【这里曾经有 Import / Export 两条权限码，Import 被删除、Export 这一轮才补上实现】
+            //
+            // 上一轮把两条都撤掉了：它们被种进元数据、也授给了 admin，但**前后端都没有任何实现**，
+            // 后果是权限管理页出现"勾了却不影响任何行为"的权限项 —— 管理员据此以为可以导入/导出用户。
+            // 本轮账号清单导出（`ExportTaskKinds.UserCsv` + 「用户管理」页的导出按钮）真的做了，
+            // 所以 `Export` 带着实现重新声明；`Import` **仍然没有、而且刻意不做**。
+            //
+            // 【为什么导入是"刻意不做"而不是"还没做"】
+            //   本系统的账号来源只有一个：管理员预置名单（姓名 + 手机号 + 组织，可选身份证），
+            //   本人凭「手机号 + 姓名 + 身份证 + 激活码」自助激活并自己设置密码。
+            //   这条链路是"外人无法注册"的**唯一**保障（见 SysUserPredefine 的注释）。
+            //   而直接导入账号 = 由管理员批量写死用户名与初始密码，等于绕过整条校验：
+            //     · 身份证/手机号核对不再发生 —— 谁都能被"预置"成一个账号；
+            //     · 初始口令攥在导入者手里，"管理员不知道任何人的密码"这条承诺作废。
+            //   替代通道已经有了且够用：「预置与激活」页支持从 Excel 粘贴批量预置。
+            //   因此**不声明 `Sys.User.Import`** —— 声明了却没有实现，正是上面刚修掉的那个错误。
         }
 
         public static class UserProvision
@@ -73,6 +84,17 @@ public static class MetadataPermissions
             public const string Update = "Sys.UserProvision.Update";
             public const string Delete = "Sys.UserProvision.Delete";
             public const string Import = "Sys.UserProvision.Import";
+
+            /// <summary>
+            /// 预置名单导出（ROADMAP 第 17 条）。
+            ///
+            /// 【为什么与 Query 分开】导出的是**一份可以落盘带走的文件**（含手机号），
+            /// 而"能在界面上翻着看"与"能整份拉走"不是同一件事 —— 与组织/异动导出同一条口径。
+            /// 但导出实现复用了列表查询（数据范围与脱敏都只有一处），
+            /// 所以 `ExportTaskPermissions` 里这个种类要求 **Export + Query 两个都有**，
+            /// 否则会在内部调用处炸出 403（"能提交任务、后台却失败"，最难解释的失败方式）。
+            /// </summary>
+            public const string Export = "Sys.UserProvision.Export";
         }
 
         public static class Code
@@ -102,7 +124,8 @@ public static class MetadataPermissions
             // 而"勾了不影响任何行为"的权限项比没有这个权限更坏。
             // 本轮真的做出了导入（`OrganizationImportExportAppService`）与
             // 导出（`ExportTaskKinds.OrganizationCsv`），所以声明与实现重新对齐。
-            // 用户 / 微代码 / 异动的导入导出仍未实现，因此**仍然没有**对应的权限码。
+            // 微代码 / 异动 / 用户那几条后来也陆续做了（见各自的注释）；
+            // 唯一**刻意不做**的是 `Sys.User.Import`，理由写在 Sys.User 里。
             public const string Import = "Sys.Org.Import";
             public const string Export = "Sys.Org.Export";
         }

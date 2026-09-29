@@ -9,6 +9,7 @@ using Xjgl.Codes;
 using Xjgl.Organizations;
 using Xjgl.Photos;
 using Xjgl.Students;
+using Xjgl.Users;
 
 namespace Xjgl.Exporting;
 
@@ -49,6 +50,8 @@ public class ExportTaskRunner : IExportTaskRunner, ITransientDependency
     private readonly IOrganizationCsvExportBuilder _orgCsvBuilder;
     private readonly ICodeCsvExportBuilder _codeCsvBuilder;
     private readonly IChangeCsvExportBuilder _changeCsvBuilder;
+    private readonly IUserCsvExportBuilder _userCsvBuilder;
+    private readonly IUserProvisionCsvExportBuilder _userProvisionCsvBuilder;
     private readonly IStudentAppService _students;
     private readonly IExportArtifactStore _artifacts;
     private readonly IClock _clock;
@@ -61,6 +64,8 @@ public class ExportTaskRunner : IExportTaskRunner, ITransientDependency
         IOrganizationCsvExportBuilder orgCsvBuilder,
         ICodeCsvExportBuilder codeCsvBuilder,
         IChangeCsvExportBuilder changeCsvBuilder,
+        IUserCsvExportBuilder userCsvBuilder,
+        IUserProvisionCsvExportBuilder userProvisionCsvBuilder,
         IStudentAppService students,
         IExportArtifactStore artifacts,
         IClock clock,
@@ -72,6 +77,8 @@ public class ExportTaskRunner : IExportTaskRunner, ITransientDependency
         _orgCsvBuilder = orgCsvBuilder;
         _codeCsvBuilder = codeCsvBuilder;
         _changeCsvBuilder = changeCsvBuilder;
+        _userCsvBuilder = userCsvBuilder;
+        _userProvisionCsvBuilder = userProvisionCsvBuilder;
         _students = students;
         _artifacts = artifacts;
         _clock = clock;
@@ -94,6 +101,8 @@ public class ExportTaskRunner : IExportTaskRunner, ITransientDependency
             ExportTaskKinds.CodeCsv => await RunCodeCsvAsync(task, cancellationToken),
             ExportTaskKinds.ChangeApplyCsv => await RunChangeCsvAsync(task, ShowKind.Applies, cancellationToken),
             ExportTaskKinds.ChangeAuditCsv => await RunChangeCsvAsync(task, ShowKind.Audit, cancellationToken),
+            ExportTaskKinds.UserCsv => await RunUserCsvAsync(task, cancellationToken),
+            ExportTaskKinds.UserProvisionCsv => await RunUserProvisionCsvAsync(task, cancellationToken),
             _ => throw new BusinessException(XjglDomainErrorCodes.ValidationFailed)
                 .WithData("reason", $"未知的任务种类「{task.Kind}」")
         };
@@ -216,6 +225,73 @@ public class ExportTaskRunner : IExportTaskRunner, ITransientDependency
     {
         Applies,
         Audit
+    }
+
+    /// <summary>
+    /// 账号清单导出（ROADMAP 第 17 条）。
+    ///
+    /// 与组织/微代码导出的区别只有一处：**数据源是框架表**，
+    /// 因此"能看到才能导出"的口径由「用户管理」页自己决定（它不按数据范围过滤），
+    /// 详见 `UserCsvExportBuilder` 的类注释。
+    /// </summary>
+    private async Task<ExportTaskRunResult> RunUserCsvAsync(
+        SysExportTask task,
+        CancellationToken cancellationToken)
+    {
+        var query = Deserialize<UserExportQueryDto>(task);
+
+        var result = await _userCsvBuilder.BuildAsync(query, cancellationToken);
+
+        var content = new MemoryStream(Encoding.UTF8.GetBytes(result.Csv));
+        var artifact = await _artifacts.WriteAsync(task.Id, "text/csv", content, cancellationToken);
+
+        // 账号数量会随着年份持续增长（每年新进教师），没有天然上限，
+        // 所以这里按 `Xjgl:Export:MaxRows` 收口，并且**触顶必须说出来**：
+        // 一份少了 3000 个账号的清单被当成"全校就这么多"，是名单类产出最坏的失败方式。
+        return new ExportTaskRunResult(
+            FileName: $"账号清单_{_clock.Now:yyyyMMddHHmmss}.csv",
+            ContentType: "text/csv",
+            RelativeArtifactPath: artifact.RelativePath,
+            FileSize: artifact.Size,
+            Total: result.Total,
+            RowCount: result.RowCount,
+            IsTruncated: result.IsTruncated,
+            Message: result.IsTruncated
+                ? $"实际导出 {result.RowCount} 行 / 共 {result.Total} 行，已达导出上限（{result.Total - result.RowCount} 行未导出）"
+                : $"共 {result.RowCount} 行");
+    }
+
+    /// <summary>
+    /// 预置名单导出（ROADMAP 第 17 条）。
+    ///
+    /// 提示里必须点一句"身份证已掩码"：任务完成提示是用户看到这份文件的最后一道说明，
+    /// 而文件本身的第一行也写了同样的话（见 `UserProvisionCsvExportBuilder`）——
+    /// 两处都写是刻意的，因为文件一旦被转发，界面上的提示就不跟着走了。
+    /// </summary>
+    private async Task<ExportTaskRunResult> RunUserProvisionCsvAsync(
+        SysExportTask task,
+        CancellationToken cancellationToken)
+    {
+        var query = Deserialize<PredefineUserQueryDto>(task);
+
+        var result = await _userProvisionCsvBuilder.BuildAsync(query, cancellationToken);
+
+        var content = new MemoryStream(Encoding.UTF8.GetBytes(result.Csv));
+        var artifact = await _artifacts.WriteAsync(task.Id, "text/csv", content, cancellationToken);
+
+        var summary = $"共 {result.RowCount} 人（身份证已掩码，只保留后 4 位，不能用于回导）";
+
+        return new ExportTaskRunResult(
+            FileName: $"预置名单_{_clock.Now:yyyyMMddHHmmss}.csv",
+            ContentType: "text/csv",
+            RelativeArtifactPath: artifact.RelativePath,
+            FileSize: artifact.Size,
+            Total: result.Total,
+            RowCount: result.RowCount,
+            IsTruncated: result.IsTruncated,
+            Message: result.IsTruncated
+                ? $"实际导出 {result.RowCount} 行 / 共 {result.Total} 行，已达导出上限（{result.Total - result.RowCount} 行未导出）；{summary}"
+                : summary);
     }
 
     private async Task<ExportTaskRunResult> RunCodeCsvAsync(

@@ -27,10 +27,17 @@ public static class ExportTaskKinds
     /// <summary>异动审核流水 CSV（一个审批节点一行）。</summary>
     public const string ChangeAuditCsv = "ChangeAuditCsv";
 
+    /// <summary>账号清单 CSV（ROADMAP 第 17 条）。</summary>
+    public const string UserCsv = "UserCsv";
+
+    /// <summary>预置名单 CSV（一个"待激活的人"一行，身份证只出后 4 位）。</summary>
+    public const string UserProvisionCsv = "UserProvisionCsv";
+
     public static readonly string[] All =
     {
         StudentCsv, StudentCardPdf, StudentRosterPdf, PhotoZip,
-        OrganizationCsv, CodeCsv, ChangeApplyCsv, ChangeAuditCsv
+        OrganizationCsv, CodeCsv, ChangeApplyCsv, ChangeAuditCsv,
+        UserCsv, UserProvisionCsv
     };
 
     public static string GetDisplayName(string kind) => kind switch
@@ -43,6 +50,8 @@ public static class ExportTaskKinds
         CodeCsv => "微代码导出",
         ChangeApplyCsv => "异动申请导出",
         ChangeAuditCsv => "异动审核流水导出",
+        UserCsv => "账号清单导出",
+        UserProvisionCsv => "预置名单导出",
         _ => kind
     };
 }

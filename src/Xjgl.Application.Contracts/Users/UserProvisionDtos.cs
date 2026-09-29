@@ -11,6 +11,17 @@ public class PredefineUserDto : EntityDto<Guid>
     /// <summary>手机号（列表页按权限可脱敏展示）。</summary>
     public string PhoneNumber { get; set; } = default!;
 
+    /// <summary>
+    /// 身份证号**掩码**（只保留后 4 位，其余一律 `*`）；未登记身份证时为 null。
+    ///
+    /// 【为什么 DTO 上只给掩码、不给明文】与学生的 `MaskedIdCard` 同一条约定：
+    ///   读取方向只出掩码，这样即使前端出错也导不出明文。
+    ///   掩码规则比学生那条**更严**（学生是前 6 后 4）：这里前 6 位也是要藏起来的 ——
+    ///   预置名单导出是一份会被转发、会落盘的通讯录，少一个可用字段就少一分泄露面，
+    ///   而后 4 位已经足够让管理员与本人核对"是不是这一条"。
+    /// </summary>
+    public string? MaskedIdCard { get; set; }
+
     public Guid OrgId { get; set; }
     public string? OrgPathCode { get; set; }
     public string? RoleNames { get; set; }

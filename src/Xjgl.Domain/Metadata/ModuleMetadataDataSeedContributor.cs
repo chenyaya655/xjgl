@@ -78,12 +78,18 @@ public class ModuleMetadataDataSeedContributor : IDataSeedContributor, ITransien
             Module("Role", "角色管理", "/system/role", "system/role/index", "Avatar", 25,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除")),
 
+            // 账号清单导出（ROADMAP 第 17 条）真的做了才声明 Export；
+            // **Import 刻意不做**（直接导入账号会绕过"预置 + 本人激活"里
+            // 手机号/姓名/身份证的核对），理由写在 MetadataPermissions.Sys.User 里。
             Module("User", "用户管理", "/system/user", "system/user/index", "User", 30,
-                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除")),
+                Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
+                Action("Export", "导出")),
 
             Module("UserProvision", "预置与激活", "/system/user-provision", "system/user-provision/index", "UserFilled", 40,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),
-                Action("Import", "导入")),
+                Action("Import", "导入"),
+                // 预置名单导出：列与"本人要核对的身份信息"一致（身份证只出后 4 位）
+                Action("Export", "导出")),
 
             Module("Code", "微代码管理", "/system/code", "system/code/index", "Collection", 50,
                 Action("Query", "查看"), Action("Create", "添加"), Action("Update", "修改"), Action("Delete", "删除"),

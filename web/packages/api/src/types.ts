@@ -1756,7 +1756,31 @@ export const ExportTaskKinds = {
    * 用哪一个决定列：两者共用同一份查询条件（`changeQuery`）。
    */
   ChangeApplyCsv: 'ChangeApplyCsv',
-  ChangeAuditCsv: 'ChangeAuditCsv'
+  ChangeAuditCsv: 'ChangeAuditCsv',
+
+  /**
+   * 账号清单导出（ROADMAP 第 17 条），需要 `Sys.User.Export`。
+   *
+   * ⚠ 它读的是 **ABP 框架表**（`AbpUsers`），因此**不按数据范围收口** ——
+   *   与「用户管理」页对齐（那个页面本身列出的是全系统账号）。
+   *   这正是"能看到才能导出"：页面上看得见几个，文件里就是几个。
+   *
+   * ⚠ 这一种**会截断**（账号数没有天然上限，后端按 `Xjgl:Export:MaxRows` 收口），
+   *   所以调用方必须展示 `describeTruncation` 的结果。
+   */
+  UserCsv: 'UserCsv',
+
+  /**
+   * 预置名单（"待激活的人"）导出，需要 `Sys.UserProvision.Export` **且** `Sys.UserProvision.Query`
+   * （后端复用列表查询，好让数据范围与脱敏只有一处实现）。
+   *
+   * ⚠ **身份证只出后 4 位**（其余是 `*`）。本项目的身份证是加密存储的，
+   *   导出明文等于把加密白做一遍。代价是这份文件**不能回导**：
+   *   激活校验需要完整身份证号，所以文件第一行与任务提示里都写明了这一点。
+   *
+   * 同样**会截断**（按 `Xjgl:Export:MaxRows` 收口），调用方要展示 `describeTruncation`。
+   */
+  UserProvisionCsv: 'UserProvisionCsv'
 } as const
 
 export type ExportTaskKind = (typeof ExportTaskKinds)[keyof typeof ExportTaskKinds]
@@ -1849,6 +1873,36 @@ export interface CreateExportTask {
    *   —— 因此"能导出哪些"与"界面上能看到哪些"由同一处逻辑决定（含数据范围）。
    */
   changeQuery?: ChangeApplyQuery
+
+  /**
+   * 账号清单导出（`ExportTaskKinds.UserCsv`）用；留空 = 导出全部账号。
+   *
+   * ⚠ 只有一个 `filter`，与「用户管理」页上那个关键字**完全同义**
+   *   （用户名 / 姓名 / 邮箱 / 手机号）。刻意不在这里摊开更多字段：
+   *   后端 `UserCsvExportBuilder` 读的是 `IIdentityUserRepository.GetListAsync(filter, ...)`，
+   *   多传的条件会被**静默忽略** —— "选了按角色导出、结果导出了全部账号"正是要避免的那种失败。
+   */
+  userQuery?: UserExportQuery
+
+  /**
+   * 预置名单导出（`ExportTaskKinds.UserProvisionCsv`）用；留空 = 全部（受数据范围约束）。
+   *
+   * ⚠ 复用「用户预置」一节里的 `PredefineUserQuery`（不是新写一个形状相同的接口）：
+   *   导出走的就是**同一个列表查询**，因此"看到什么就导出什么"由同一处逻辑决定
+   *   （含数据范围与手机号脱敏）。分页字段（`skipCount` / `maxResultCount`）会被后端忽略，
+   *   由 `Xjgl:Export:MaxRows` 收口并在触顶时如实提示。
+   */
+  userProvisionQuery?: PredefineUserQuery
+}
+
+/**
+ * 账号清单导出的关键字（与「用户管理」页的 `filter` 同义）。
+ *
+ * 单独用一个类型而不是直接写 `{ filter?: string }`，是为了让"这里只有这一个条件"
+ * 在类型层面看得出来 —— 见 `CreateExportTask.userQuery` 的说明。
+ */
+export interface UserExportQuery {
+  filter?: string
 }
 
 export interface ExportTaskQuery extends PagedRequest {

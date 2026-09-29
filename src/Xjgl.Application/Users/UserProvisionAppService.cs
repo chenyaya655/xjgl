@@ -11,6 +11,7 @@ using Volo.Abp.Timing;
 using Xjgl.Data;
 using Xjgl.Organizations;
 using Xjgl.Permissions;
+using Xjgl.Students;
 using Xjgl.Text;
 using Xjgl.Validation;
 
@@ -33,6 +34,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     private readonly IdentityUserManager _userManager;
     private readonly IdentityRoleManager _roleManager;
     private readonly IStringEncryptionService _stringEncryptionService;
+    private readonly IIdCardProtector _idCardProtector;
     private readonly IConfiguration _configuration;
     private readonly IClock _clock;
 
@@ -43,6 +45,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         IdentityUserManager userManager,
         IdentityRoleManager roleManager,
         IStringEncryptionService stringEncryptionService,
+        IIdCardProtector idCardProtector,
         IConfiguration configuration,
         IClock clock)
     {
@@ -52,6 +55,7 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         _userManager = userManager;
         _roleManager = roleManager;
         _stringEncryptionService = stringEncryptionService;
+        _idCardProtector = idCardProtector;
         _configuration = configuration;
         _clock = clock;
     }
@@ -530,11 +534,18 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
         return new string(chars);
     }
 
-    private static PredefineUserDto ToDto(SysUserPredefine p) => new()
+    /// <summary>
+    /// 实体 → 对外 DTO。
+    ///
+    /// 从静态改成实例，是因为掩码要解密（<see cref="_idCardProtector"/>）——
+    /// 明文只在这一步短暂存在，绝不进 DTO。
+    /// </summary>
+    private PredefineUserDto ToDto(SysUserPredefine p) => new()
     {
         Id = p.Id,
         RealName = p.RealName,
         PhoneNumber = MaskPhone(p.PhoneNumber),
+        MaskedIdCard = MaskIdCardLast4(p.IdCardEncrypted),
         OrgId = p.OrgId,
         OrgPathCode = p.OrgPathCode,
         RoleNames = p.RoleNames,
@@ -554,5 +565,30 @@ public class UserProvisionAppService : XjglAppService, IUserProvisionAppService
     private static string MaskPhone(string phone)
     {
         return phone.Length == 11 ? $"{phone[..3]}****{phone[7..]}" : phone;
+    }
+
+    /// <summary>
+    /// 身份证**只保留后 4 位**的掩码（`**************1234`）。
+    ///
+    /// 【为什么比学生那条（前 6 后 4）更严】这里不共用 `IIdCardProtector.MaskPlain`，
+    /// 是因为两者的读者不同：学生名单是学籍管理员的工作底稿，前 6 位（行政区划码）
+    /// 对他判断"这个号对不对"有帮助；而预置名单导出是一份会被转发、会落盘的**通讯录**，
+    /// 前 6 位同样是身份信息的一部分，能不出去就不出去。
+    ///
+    /// 解密失败（密钥轮换后的老数据）返回 null，让那一格显示 `—`，
+    /// 绝不能让一条坏数据把整页列表变成 500。
+    /// </summary>
+    private string? MaskIdCardLast4(string? idCardEncrypted)
+    {
+        var plain = _idCardProtector.Decrypt(idCardEncrypted);
+
+        if (plain.IsNullOrWhiteSpace())
+        {
+            return null;
+        }
+
+        return plain.Length > 4
+            ? new string('*', plain.Length - 4) + plain[^4..]
+            : new string('*', plain.Length);
     }
 }

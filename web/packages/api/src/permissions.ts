@@ -40,16 +40,21 @@ export const MetadataPermissions = {
       Query: 'Sys.User.Query',
       Create: 'Sys.User.Create',
       Update: 'Sys.User.Update',
-      Delete: 'Sys.User.Delete'
-      // Import / Export 已撤掉：后端与界面都没有实现，留着只会让权限管理页
-      // 出现"勾了却不影响任何行为"的权限项（与 MetadataPermissions.cs 保持一致）。
+      Delete: 'Sys.User.Delete',
+      // 账号清单导出：本轮真的做了才声明（「用户管理」页的导出按钮 + ExportTaskKinds.UserCsv）。
+      // ⚠ **没有 Import，而且是刻意不做**：系统的账号来源只有「预置 + 本人激活」，
+      //   直接导入账号会绕过激活时对手机号 / 姓名 / 身份证的核对（详见后端 MetadataPermissions.cs）。
+      //   声明一个不存在的 Import 会让权限管理页出现"勾了却不影响任何行为"的项。
+      Export: 'Sys.User.Export'
     },
     UserProvision: {
       Query: 'Sys.UserProvision.Query',
       Create: 'Sys.UserProvision.Create',
       Update: 'Sys.UserProvision.Update',
       Delete: 'Sys.UserProvision.Delete',
-      Import: 'Sys.UserProvision.Import'
+      Import: 'Sys.UserProvision.Import',
+      // 预置名单导出；后端这个种类同时要求 Export + Query（导出内部复用列表查询）
+      Export: 'Sys.UserProvision.Export'
     },
     Code: {
       Query: 'Sys.Code.Query',

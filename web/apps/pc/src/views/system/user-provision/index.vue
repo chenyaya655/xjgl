@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { provisionApi, orgApi } from '@/api'
-import type { CreatePredefineUser, OrgDto, OrgTreeNode, PredefineUser } from '@/api/types'
+import { describeTruncation, exportTaskApi, provisionApi, orgApi, saveBlob } from '@/api'
+import type { CreatePredefineUser, ExportTask, OrgDto, OrgTreeNode, PredefineUser } from '@/api/types'
+import { ExportTaskKinds } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
@@ -26,6 +27,16 @@ const canCreate = computed(() => auth.can(MetadataPermissions.Sys.UserProvision.
 const canImport = computed(() => auth.can(MetadataPermissions.Sys.UserProvision.Import))
 const canUpdate = computed(() => auth.can(MetadataPermissions.Sys.UserProvision.Update))
 const canDelete = computed(() => auth.can(MetadataPermissions.Sys.UserProvision.Delete))
+
+/**
+ * 导出预置名单。
+ *
+ * 后端这个导出种类要求 `Sys.UserProvision.Export` **且** `Sys.UserProvision.Query`
+ * （导出复用了列表查询，好让数据范围与手机号脱敏只有一处实现）。
+ * 前端仍然只按 Export 显隐：再叠一个 Query 判断，只会让"两条权限都给了却看不到按钮"
+ * 变成一个没人能解释的问题 —— 而后端会在提交任务时给出明确原因。
+ */
+const canExport = computed(() => auth.can(MetadataPermissions.Sys.UserProvision.Export))
 
 const statusOptions = [
   { value: 'Pending', label: '待激活' },
@@ -320,6 +331,75 @@ async function remove(row: PredefineUser): Promise<void> {
   await load()
 }
 
+// ---------------------------------------------------------------------------
+// 导出（后台任务）
+// ---------------------------------------------------------------------------
+
+/** 页面卸载后停止轮询（理由同组织/用户导出：切走之后没人需要那个定时器）。 */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+})
+
+const exporting = ref(false)
+const exportProgressText = ref('')
+
+/**
+ * 导出预置名单（沿用当前关键字与状态，看到什么就导出什么）。
+ *
+ * ⚠ **身份证列是掩码的**（只保留后 4 位，其余 `*`）：本系统的身份证是加密存储的，
+ *   导出明文等于把加密白做一遍。代价是这份文件**不能回导** ——
+ *   激活校验要的是完整身份证号，所以文件第一行与任务提示里都写明了这一点。
+ */
+async function exportPredefines(): Promise<void> {
+  exporting.value = true
+  exportProgressText.value = '排队中…'
+
+  try {
+    const task = await exportTaskApi.run(
+      {
+        kind: ExportTaskKinds.UserProvisionCsv,
+        userProvisionQuery: {
+          keyword: query.keyword.trim() || undefined,
+          status: query.status
+        }
+      },
+      {
+        shouldStop: () => disposed,
+        onProgress: (t: ExportTask) => {
+          exportProgressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+        }
+      }
+    )
+
+    const blob = await exportTaskApi.download(task.id)
+
+    saveBlob(blob, task.fileName || `预置名单_${new Date().toISOString().slice(0, 10)}.csv`)
+
+    // 预置记录会随年份增长，没有天然上限，后端按 Xjgl:Export:MaxRows 收口 ——
+    // 触顶必须显式提示，否则"少了 800 个人"看起来就像"全县就这么多"。
+    const truncation = describeTruncation(task)
+
+    if (truncation) {
+      ElMessage.warning(truncation)
+    } else {
+      ElMessage.success(
+        task.message ? `${task.kindName}已完成：${task.message}` : `${task.kindName}已完成`
+      )
+    }
+  } catch (e) {
+    // 与其它导出同一处处理：HTTP 失败已由拦截器提示（且给出后端 reason），
+    // 只有 `exportTaskApi.run` 抛的业务错误需要在这里补一句，
+    // 否则就是"点了导出、转圈停下、什么都没发生"。
+    if (!(e as { isAxiosError?: boolean })?.isAxiosError) {
+      ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
+    }
+  } finally {
+    exporting.value = false
+    exportProgressText.value = ''
+  }
+}
+
 onMounted(() => {
   void load()
 })
@@ -361,6 +441,20 @@ onMounted(() => {
         <div class="prov__header">
           <span>预置名单（共 {{ total }} 人）</span>
           <div>
+            <!--
+              导出按 `Sys.UserProvision.Export` 显隐（后端 `ExportTaskPermissions`）：
+              没有这层判断，按钮点得动而接口回 403 —— 最难解释的失败。
+              位置放在「批量预置」左边：导出是"看"，批量预置是"改"，不该混在一起。
+            -->
+            <el-button
+              v-if="canExport"
+              :loading="exporting"
+              :disabled="exporting"
+              @click="exportPredefines"
+            >
+              <AppIcon name="Download" />
+              <span>导出</span>
+            </el-button>
             <el-button v-if="canImport" @click="openImport">
               <AppIcon name="Upload" />
               <span>批量预置</span>
@@ -372,6 +466,18 @@ onMounted(() => {
           </div>
         </div>
       </template>
+
+      <!-- 导出要等后台生成；只说"转圈"用户不知道卡在哪一步 -->
+      <div v-if="exportProgressText" class="prov__muted">{{ exportProgressText }}</div>
+
+      <el-alert
+        v-if="canExport"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="prov__tip"
+        title="导出的身份证号已掩码（只保留后 4 位，其余为 *）：身份证在本系统里是加密存储的，导出明文等于把加密白做一遍。代价是这份文件不能回导 —— 重新预置时必须填写完整身份证号。文件第一行也写了同样的说明。"
+      />
 
       <el-alert
         type="info"

@@ -45,6 +45,25 @@ public static class ExportTaskPermissions
         ExportTaskKinds.ChangeAuditCsv
             => new[] { MetadataPermissions.Chg.Audit.Export },
 
+        // 账号清单是**框架数据**（AbpUsers），页面本身不按数据范围过滤
+        //（它走的是 ABP 自带的 `/api/identity/users`），导出与页面对齐。
+        //
+        // 【为什么这里不需要再要一个 Query 权限】
+        //   导出实现读的是 `IIdentityUserRepository`。它是个仓储、没有 `[Authorize]`，
+        //   所以"能导哪些"完全由这一条权限决定 —— 也就是"勾了就能导出他能看到的全部账号"。
+        //   刻意**不**顺手再要 `AbpIdentity.Users`：那是框架权限、语义是"能调框架的用户接口"，
+        //   而本系统里建/改用户本来就要它，把它捆进导出只会让"只给导出"这种最小授权做不到。
+        ExportTaskKinds.UserCsv
+            => new[] { MetadataPermissions.Sys.User.Export },
+
+        // 预置名单导出**复用了列表查询**（`IUserProvisionAppService.GetListAsync`），
+        // 这样数据范围与手机号脱敏都只有一处实现、不会与页面漂移。
+        // 代价是内部那次调用也要过 `Sys.UserProvision.Query`，所以两个权限都要 ——
+        // 与照片导出（Export + Query）同一条理由：只给 Export 的话会在内部调用处
+        // 炸出 403，而那是在后台线程里失败的，用户只看到"任务失败"、看不出跟权限有关。
+        ExportTaskKinds.UserProvisionCsv
+            => new[] { MetadataPermissions.Sys.UserProvision.Export, MetadataPermissions.Sys.UserProvision.Query },
+
         _ => Array.Empty<string>()
     };
 
@@ -89,6 +108,14 @@ public class CreateExportTaskDto
     /// 留空表示导出全部（受数据范围约束）。
     /// </summary>
     public Changes.ChangeApplyQueryDto? ChangeQuery { get; set; }
+
+    /// <summary><see cref="ExportTaskKinds.UserCsv"/> 用；留空表示导出全部账号。</summary>
+    public Users.UserExportQueryDto? UserQuery { get; set; }
+
+    /// <summary>
+    /// <see cref="ExportTaskKinds.UserProvisionCsv"/> 用；留空表示导出全部预置记录（受数据范围约束）。
+    /// </summary>
+    public Users.PredefineUserQueryDto? UserProvisionQuery { get; set; }
 }
 
 /// <summary>任务列表的查询条件。</summary>

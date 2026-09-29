@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { describeError, identityApi, isJsonParseError } from '@/api'
-import type { IdentityRole, IdentityUser } from '@/api/types'
+import { describeError, describeTruncation, exportTaskApi, identityApi, isJsonParseError, saveBlob } from '@/api'
+import type { ExportTask, IdentityRole, IdentityUser } from '@/api/types'
+import { ExportTaskKinds } from '@/api/types'
 import AppIcon from '@/components/AppIcon.vue'
 import { MetadataPermissions } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
@@ -27,6 +28,18 @@ const auth = useAuthStore()
 const canCreate = computed(() => auth.can(MetadataPermissions.Sys.User.Create))
 const canUpdate = computed(() => auth.can(MetadataPermissions.Sys.User.Update))
 const canDelete = computed(() => auth.can(MetadataPermissions.Sys.User.Delete))
+
+/**
+ * 导出账号清单。
+ *
+ * 【为什么导出不挂在"能查"上】能翻着看的名单与"能整份落盘带走"不是同一件事，
+ * 与组织/异动导出同一条口径（后端 `ExportTaskPermissions` 用的也是这个码）。
+ *
+ * ⚠ 这一页**没有、也不加数据范围过滤**：用户表是框架数据（`AbpUsers`），
+ *   后端导出用的就是本页那条查询。因此"页面上看得见几个，文件里就是几个"——
+ *   少了反而会让人以为系统丢了账号。
+ */
+const canExport = computed(() => auth.can(MetadataPermissions.Sys.User.Export))
 
 const loading = ref(false)
 const rows = ref<IdentityUser[]>([])
@@ -252,6 +265,81 @@ async function remove(row: IdentityUser): Promise<void> {
   await load()
 }
 
+// ---------------------------------------------------------------------------
+// 导出（后台任务）
+// ---------------------------------------------------------------------------
+
+/**
+ * 页面卸载后停止轮询。
+ *
+ * 少了这个，用户点了导出再立刻切走，定时器仍会每 1.5 秒打一次接口 ——
+ * 直到 5 分钟超时为止，而那时他早就不在这个页面了。
+ */
+let disposed = false
+onUnmounted(() => {
+  disposed = true
+})
+
+const exporting = ref(false)
+/** 任务的真实阶段（排队中 / 正在生成）：只说"转圈"用户不知道卡在哪一步。 */
+const exportProgressText = ref('')
+
+/**
+ * 提交导出任务并等它完成，然后下载（与组织/微代码/异动导出走完全同一条路径）。
+ *
+ * **沿用当前关键字**：看到什么就导出什么。留空即全部账号 ——
+ * 与页面上"关键字留空 = 列出全部"完全一致。
+ */
+async function exportUsers(): Promise<void> {
+  exporting.value = true
+  exportProgressText.value = '排队中…'
+
+  try {
+    const filter = query.filter.trim()
+
+    const task = await exportTaskApi.run(
+      { kind: ExportTaskKinds.UserCsv, userQuery: { filter: filter || undefined } },
+      {
+        shouldStop: () => disposed,
+        onProgress: (t: ExportTask) => {
+          exportProgressText.value = t.status === 'Running' ? '正在生成…' : '排队中…'
+        }
+      }
+    )
+
+    const blob = await exportTaskApi.download(task.id)
+
+    // 文件名以**后端给的**为准（带了日期），后端没给才用兜底名
+    saveBlob(blob, task.fileName || `账号清单_${new Date().toISOString().slice(0, 10)}.csv`)
+
+    // 账号数没有天然上限，后端按 Xjgl:Export:MaxRows 收口 ——
+    // 触顶必须显式提示，只弹一句"成功"等于把"少了 3000 个账号"藏起来。
+    const truncation = describeTruncation(task)
+
+    if (truncation) {
+      ElMessage.warning(truncation)
+    } else {
+      ElMessage.success(
+        task.message ? `${task.kindName}已完成：${task.message}` : `${task.kindName}已完成`
+      )
+    }
+  } catch (e) {
+    // 这里的提示**不能省**，但也不能重复弹：
+    //   · 入队/轮询/下载的 HTTP 失败已被拦截器弹过（且给出的是后端 reason）；
+    //   · 而任务本身 Failed / 被取消 / 前端等超时是 `exportTaskApi.run` 抛的
+    //     **业务错误**，它不经过拦截器 —— 不提示就等于"点了导出、转圈停下、
+    //     什么都没发生"，用户只会以为功能坏了。
+    // 用 `isAxiosError` 这个 axios 自己打的标记把两者分开。
+    if (!(e as { isAxiosError?: boolean })?.isAxiosError) {
+      ElMessage.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
+    }
+  } finally {
+    // 无论成功、失败还是超时都要清掉，否则那行提示会一直留在页面上
+    exporting.value = false
+    exportProgressText.value = ''
+  }
+}
+
 onMounted(async () => {
   await loadRoles()
   await load()
@@ -287,12 +375,39 @@ onMounted(async () => {
       <template #header>
         <div class="user__header">
           <span>用户（共 {{ total }} 个）</span>
-          <el-button v-if="canCreate" type="primary" @click="openCreate">
-            <AppIcon name="Plus" />
-            <span>新建用户</span>
-          </el-button>
+          <div>
+            <!--
+              导出按 `Sys.User.Export` 显隐，与后端 `ExportTaskPermissions` 一致：
+              少了这层判断，按钮点得动而接口回 403 —— 那是最难解释的失败。
+            -->
+            <el-button
+              v-if="canExport"
+              :loading="exporting"
+              :disabled="exporting"
+              @click="exportUsers"
+            >
+              <AppIcon name="Download" />
+              <span>导出</span>
+            </el-button>
+            <el-button v-if="canCreate" type="primary" @click="openCreate">
+              <AppIcon name="Plus" />
+              <span>新建用户</span>
+            </el-button>
+          </div>
         </div>
       </template>
+
+      <!-- 导出要等后台生成，只说"转圈"用户不知道卡在哪一步 -->
+      <div v-if="exportProgressText" class="user__hint">{{ exportProgressText }}</div>
+
+      <el-alert
+        v-if="canExport"
+        type="info"
+        :closable="false"
+        show-icon
+        class="user__tip"
+        title="导出的是当前关键字下的全部账号（留空即全部），列与列表一致，另含角色与所属组织。账号清单不按数据范围收口 —— 与这一页保持一致。"
+      />
 
       <el-alert
         v-if="loadFailed"

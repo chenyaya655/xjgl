@@ -12,6 +12,7 @@ using Xjgl.Codes;
 using Xjgl.Data;
 using Xjgl.Organizations;
 using Xjgl.RateLimiting;
+using Xjgl.Users;
 
 namespace Xjgl.Exporting;
 
@@ -291,6 +292,13 @@ public class ExportTaskAppService : XjglAppService, IExportTaskAppService
             ExportTaskKinds.ChangeApplyCsv or ExportTaskKinds.ChangeAuditCsv
                 => input.ChangeQuery ?? new ChangeApplyQueryDto(),
 
+            // 账号清单导出允许不带条件（导出全部账号）：页面上的关键字留空时就是"全部"，
+            // 与 `OrganizationCsv` 同一条口径。
+            ExportTaskKinds.UserCsv => input.UserQuery ?? new UserExportQueryDto(),
+
+            ExportTaskKinds.UserProvisionCsv
+                => input.UserProvisionQuery ?? new PredefineUserQueryDto(),
+
             _ => null
         };
 
@@ -333,6 +341,9 @@ internal static class ExportTaskDisplayNames
         "Stu.Student.Print" => "学籍打印",
         "Pho.Photo.Export" => "照片导出",
         "Pho.Photo.Query" => "照片查询",
+        "Sys.User.Export" => "用户导出",
+        "Sys.UserProvision.Export" => "预置名单导出",
+        "Sys.UserProvision.Query" => "预置名单查看",
         _ => permission
     };
 }
