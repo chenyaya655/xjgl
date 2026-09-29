@@ -450,7 +450,7 @@ dotnet run --project test/Xjgl.Domain.Tests        # 单元测试全绿（不依
 dotnet run --project test/Xjgl.Application.Tests   # 集成测试全绿（需要本地数据库）
 cd web && corepack pnpm@9.15.0 -r typecheck        # 三端类型检查（PC / H5 / 共享包）
 cd web && corepack pnpm@9.15.0 --filter @xjgl/pc run test:unit
-node tools/check-permissions-sync.mjs       # 权限码 / 码类别 / 操作类型三处约定
+node tools/check-permissions-sync.mjs       # 七处跨语言约定（含"权限码必须有执行点"）
 cd web && corepack pnpm@9.15.0 test:e2e     # 端到端（自动拉起前后端）
 ```
 

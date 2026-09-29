@@ -15,8 +15,12 @@
  *      而 `ACTION_TYPE` 码表里没有它 → "操作类型"下拉选不到、编辑后显示为空。
  *      （这一条真的发生过：前端手写的列表与码表各自漂移，一边有 Assign/Compensate、
  *      另一边有 Download。）
+ *   4~6. 导出任务种类、数据范围码值、异动状态码值（后来陆续补的，理由写在各自的段落里）。
+ *   7. 权限码**没有任何执行点**：声明了、也授了，却没有 `[Authorize]` / `IsGrantedAsync`
+ *      指向它 —— 权限管理页于是出现"勾了却不影响任何行为"的开关。
+ *      （本项目真实发生过：一次 8 条码，见第 7 节的长注释。）
  *
- * eslint 管不了这三件事（它们是跨语言、跨文件的约定），所以单独写一个核对脚本。
+ * eslint 管不了这些事（它们是跨语言、跨文件的约定），所以单独写一个核对脚本。
  * 与 `tools/audit-routes.mjs`、`tools/verify-deploy.mjs` 同一性质：
  * **把"只能靠记得"变成 CI 里会红的一步**。
  *
@@ -287,6 +291,188 @@ if (!actionTypeBlock) {
 }
 
 // ---------------------------------------------------------------------------
+// 7) 每个权限码都必须有「执行点」（否则就是"勾了却不影响任何行为"）
+// ---------------------------------------------------------------------------
+
+// 【为什么这条值得机械核对 —— 它是本项目真实栽过的跟头】
+//   本项目曾把 8 条权限码（Sys.User.Import/Export、Sys.Org.Import/Export、
+//   Sys.Code.Import/Export、Chg.Apply.Export、Chg.Audit.Export）种进元数据、
+//   也授给了 admin，但**前后端都没有任何实现**。后果不是报错，而是权限管理页
+//   出现"勾了却不影响任何行为"的权限项 —— 管理员据此以为已经能导入了。
+//   后来是实现了才重新声明的（见 MetadataPermissions.cs 的注释）。
+//
+//   这件事此前只靠人记得。这条核对把它变成 CI 里会红的一步，而且是**双向**的：
+//     · 声明了却没有任何执行点 → 失败（要么补实现，要么别声明）；
+//     · 白名单里的码**变成有执行点**了也失败 —— 否则白名单会一路掩盖后续回归，
+//       白名单只应该装"确实是菜单级"的那些码。
+//
+// 【什么是「执行点」】这个仓库里权限码有三种落地方式，脚本三种都认：
+//     1. `[Authorize(MetadataPermissions.X.Y)]` —— 绝大多数接口；
+//     2. `IsGrantedAsync(MetadataPermissions.X.Y)` —— 表达不了在 attribute 里的场景
+//        （如异动附件的读路径要"任一权限即可"）；
+//     3. 赋给 `private const string XxxPermission` 后在方法体里判 —— 2 的变体。
+//   做法是按"**所在文件**里有没有 `[Authorize(` 或 `IsGrantedAsync(`"来判定，
+//   而不是逐行匹配调用点：这样 1/2/3 三种写法都被覆盖，代价是个别误判的可能
+//   （所以下面还要求"没有执行点的码必须带理由进白名单"，误判会在白名单评审时暴露）。
+//
+//   导出类权限码**不写在方法上**：它们集中在
+//   `ExportTaskPermissions.GetRequiredPermissions` 里，由「入队」与「下载」两处消费
+//   （已核对 ExportTaskAppService 与 ExportTaskDownloadService 各有一处遍历）。
+//   所以那个映射表文件也算执行点。
+//
+// 【白名单为什么必须一条一条写理由】
+//   菜单级权限码是**有意为之**，不是漏了：它们的数据被低权限页面复用
+//   （码值下拉、学校下拉、异动类型），把读接口按 Query 码卡住，会让
+//   "没有后台管理权限、但要录学生/传照片"的教师一起 403 ——
+//   那是把"能不能进后台页"错当成了"能不能读这份参照数据"。
+//   写清每条的理由，下一个人才能判断"我这条该不该进白名单"。
+const MENU_ONLY_PERMISSIONS = new Map([
+  // ---- 本系统自己的读接口：只要求登录（能看多少另有数据范围约束）----
+  [
+    'Sys.Module.Query',
+    '模块管理菜单；/api/app/module/tree 是该页的数据源，接口只要求登录'
+  ],
+  [
+    'Sys.Code.Query',
+    '微代码菜单；码值下拉（useCodeOptions）几乎每个页面都要用，卡接口会让下拉一起变空'
+  ],
+  [
+    'Sys.Org.Query',
+    '组织管理菜单；学校/组织下拉被学生、照片、异动等页面复用'
+  ],
+  [
+    'Chg.Type.Query',
+    '异动类型菜单；异动申请页需要读类型列表'
+  ],
+
+  // ---- 接口在 ABP 自带的控制器上，判的是 AbpIdentity.* / 权限管理权限 ----
+  //
+  // 这三个页面操作的是 ABP 框架表（AbpUsers / AbpRoles / AbpPermissionGrants），
+  // 走的是 ABP 自带的 /api/identity/*、/api/permission-management/* 控制器，
+  // 那些控制器上的 [Authorize] 判的是 AbpIdentity.* —— 本组业务码只决定菜单能否看见。
+  // 授权时必须**两个都给**，否则出现"菜单看得见、点进去 302"（理由详见
+  // MetadataPermissions.cs 里 Sys.Role 的注释与 DemoDataSeedContributor 的说明）。
+  ['Sys.Role.Create', '菜单级；接口是 ABP 自带 /api/identity/roles（判 AbpIdentity.Roles*）'],
+  ['Sys.Role.Delete', '同上'],
+  ['Sys.User.Query', '菜单级；接口是 ABP 自带 /api/identity/users（判 AbpIdentity.Users*）'],
+  ['Sys.User.Create', '同上'],
+  ['Sys.User.Update', '同上'],
+  ['Sys.User.Delete', '同上'],
+  ['Sys.Permission.Query', '菜单级；接口是 ABP 自带 /api/permission-management/*'],
+  ['Sys.Permission.Assign', '同上']
+])
+
+{
+  // 解析 MetadataPermissions.cs：嵌套类路径 + 常量名 → 符号名；同时取权限码字面量
+  const stack = []
+  const declared = []
+
+  for (const line of permissionsCs.split('\n')) {
+    const cls = line.match(/^\s*public\s+static\s+class\s+(\w+)/)
+    if (cls) {
+      stack.push(cls[1])
+      continue
+    }
+
+    if (/^\s*\}/.test(line)) {
+      if (stack.length > 0) stack.pop()
+      continue
+    }
+
+    const konst = line.match(/public\s+const\s+string\s+(\w+)\s*=\s*"([^"]+)"/)
+    if (konst) {
+      // stack[0] 是外层类名 MetadataPermissions，因此拼出来就是源码里的符号名
+      declared.push({ symbol: `${stack.join('.')}.${konst[1]}`, code: konst[2] })
+    }
+  }
+
+  /** 递归收集 src 下的 .cs（跳过 obj/bin，避免把生成代码里的引用也算进来）。 */
+  function walkCs(dir) {
+    const out = []
+
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === 'obj' || entry.name === 'bin') continue
+        out.push(...walkCs(path.join(dir, entry.name)))
+      } else if (entry.name.endsWith('.cs')) {
+        out.push(path.join(dir, entry.name))
+      }
+    }
+
+    return out
+  }
+
+  const definitionFile = path.join(
+    repoRoot,
+    'src/Xjgl.Application.Contracts/Permissions/MetadataPermissions.cs'
+  )
+  const exportMappingFile = path.join(
+    repoRoot,
+    'src/Xjgl.Application.Contracts/Exporting/ExportTaskDtos.cs'
+  )
+
+  const enforced = new Set()
+  const referenced = new Set()
+
+  if (declared.length === 0) {
+    problems.push(
+      '没有从 MetadataPermissions.cs 解析出权限码常量（含符号名）—— 正则可能已过时，请修脚本。'
+    )
+  } else {
+    for (const file of walkCs(path.join(repoRoot, 'src'))) {
+      if (file === definitionFile) continue
+
+      const text = fs.readFileSync(file, 'utf8')
+      const hasCheckSite =
+        /\[Authorize\(|IsGrantedAsync\(/.test(text) || file === exportMappingFile
+
+      for (const { symbol, code } of declared) {
+        if (!text.includes(symbol)) continue
+
+        referenced.add(code)
+        if (hasCheckSite) enforced.add(code)
+      }
+    }
+
+    const noEnforcement = declared.filter((d) => !enforced.has(d.code))
+
+    for (const d of noEnforcement) {
+      if (MENU_ONLY_PERMISSIONS.has(d.code)) continue
+
+      problems.push(
+        `权限码没有任何执行点：${d.code}（${d.symbol}）\n` +
+          '    （后果：权限管理页出现"勾了却不影响任何行为"的权限项，管理员据此以为已经能用了。' +
+          '要就整条链路一起做，不要只声明；若确实只做菜单级，请连同理由加进脚本的 MENU_ONLY_PERMISSIONS）'
+      )
+    }
+
+    for (const code of MENU_ONLY_PERMISSIONS.keys()) {
+      if (!declared.some((d) => d.code === code)) {
+        problems.push(`白名单里的权限码已经不存在：${code}\n    （请在脚本里删掉这一条）`)
+        continue
+      }
+
+      if (enforced.has(code)) {
+        problems.push(
+          `白名单里的权限码已经有执行点了：${code}\n` +
+            '    （请把它从 MENU_ONLY_PERMISSIONS 删掉 —— 白名单只应装"确实是菜单级"的码，' +
+            '否则它会一路掩盖后续回归）'
+        )
+      }
+    }
+
+    const orphan = noEnforcement.filter((d) => !referenced.has(d.code)).map((d) => d.code)
+
+    notes.push(
+      `权限码执行点：${declared.length} 条中 ${declared.length - noEnforcement.length} 条有执行点，` +
+        `${noEnforcement.length} 条为菜单级（白名单 ${MENU_ONLY_PERMISSIONS.size} 条${
+          orphan.length > 0 ? `；其中 ${orphan.length} 条在 src 里连引用都没有：${orphan.join(', ')}` : ''
+        }）`
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 console.log('核对前后端约定一致性…\n')
 
@@ -307,4 +493,6 @@ if (problems.length > 0) {
   process.exit(1)
 }
 
-console.log('\n✅ 六处约定一致：权限码 / 码类别 / 操作类型 / 导出种类 / 数据范围 / 异动状态。')
+console.log(
+  '\n✅ 七处约定一致：权限码 / 码类别 / 操作类型 / 导出种类 / 数据范围 / 异动状态 / 权限码执行点。'
+)

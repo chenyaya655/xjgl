@@ -21,7 +21,7 @@
 | `.github/workflows/ci.yml` | 4 个 job：后端（构建+单测+集成+Swagger 冒烟）/ 前端（Node 24，三端类型检查 + 单测 + 约定核对 + PC/H5 两次构建）/ 部署编排 / 端到端 |
 | `docs/` | 设计文档 + **49 章学习文档**（另 1 篇文档导航 README，共 50 个 md）+ 3 篇对外技术文章 |
 | `tools/check-doc-links.mjs` | 校验所有相对链接可解析（中文文件名最容易断链） |
-| `tools/check-permissions-sync.mjs` | 跨 C# 与 TS 核对权限码 / 码类别 / 操作类型三处约定（漏改不会报错，只会"按钮不显示、下拉变空"） |
+| `tools/check-permissions-sync.mjs` | 跨 C# 与 TS 核对**七处**约定：权限码 / 码类别 / 操作类型 / 导出任务种类 / 数据范围 / 异动状态 / **权限码执行点**（漏改不会报错，只会"按钮不显示、下拉变空"；最后一处防的是"声明了却没有实现的权限码"） |
 | `tools/reset-test-db.mjs` | 本机重建测试库（默认 dry-run；库名不匹配 `/test/i` 直接拒绝） |
 | `.editorconfig` / `.gitattributes` | 4/2 空格、统一 UTF-8 与 LF、二进制标记 |
 | `.gitignore` | 排除 `.tools/`、`Logs/`、`node_modules/`、`*.pfx`、密钥文件、**内部会话纪要** |

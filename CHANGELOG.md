@@ -87,6 +87,28 @@
 （用例里明明先 `ShouldNotBeNull()` 了，编译器不认）。**刻意没有放宽或屏蔽**，
 免得把真问题一起盖住。
 
+### 本轮修复：把"权限码必须有执行点"变成 CI 会红的一步
+
+`tools/check-permissions-sync.mjs` 从六处核对加到**七处**，新增的一条是
+**每个权限码都必须有执行点**（`[Authorize]` / `IsGrantedAsync` 指向它，
+导出类走 `ExportTaskPermissions`）。
+
+- **为什么值得加**：本项目曾一次性声明并授出 **8 条没有任何实现**的权限码
+  （`Sys.User.Import/Export`、`Sys.Org.Import/Export`、`Sys.Code.Import/Export`、
+  `Chg.Apply.Export`、`Chg.Audit.Export`），权限管理页因此出现
+  **"勾了却不影响任何行为"**的开关 —— 管理员据此以为已经能导入了。
+  当时修掉了，但**没有任何东西在防它复发**，只能靠人记得。
+- **现在是双向的**：声明了却没有执行点 → 失败；白名单里的码**变成有执行点**了
+  → 也失败（否则白名单会一路掩盖后续回归）。
+- **顺带把 12 条"菜单级"权限码连同理由落成白名单**，这也是第一次把这个
+  此前只存在于注释里的区分写清楚：其中 4 条是本系统自己的读接口
+  （`Sys.Module.Query` / `Sys.Code.Query` / `Sys.Org.Query` / `Chg.Type.Query` ——
+  这些数据被低权限页面复用，按 Query 码卡接口会让录学生、传照片的教师一起 403）；
+  另外 8 条接口在 ABP 自带控制器上（判 `AbpIdentity.*`），业务码只决定菜单可见。
+  `MetadataPermissions.cs` 的类注释里同步写明了这条约定。
+- **做了变异验证**：把 `Sys.Code.Create` 的 `[Authorize(...)]` 降级为 `[Authorize]`
+  之后脚本确实变红并指名该码，还原后复绿 —— 不是"看着像在检查"。
+
 ### 待做
 
 剩下的都是**明确列出来**的，不在代码里藏着：见 [`ROADMAP.md`](ROADMAP.md)。

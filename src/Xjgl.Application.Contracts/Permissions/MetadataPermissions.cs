@@ -12,6 +12,31 @@ namespace Xjgl.Permissions;
 ///
 /// 约定：**新增业务模块时，权限码必须同时出现在这里和种子数据里**，
 /// 否则 <c>[Authorize]</c> 会引用一个不存在的权限（表现为所有人都被拒绝）。
+///
+/// ★★ 第二条约定：**每个权限码都必须有"执行点"** —— 也就是至少有一处
+/// <c>[Authorize(MetadataPermissions.X.Y)]</c> 或 <c>IsGrantedAsync(...)</c> 指向它
+/// （导出类权限码例外：它们集中在 <c>ExportTaskPermissions.GetRequiredPermissions</c> 里）。
+///
+/// 为什么把这条写成硬约定：本项目曾一次性声明并授出 8 条**没有任何实现**的权限码
+/// （<c>Sys.User.Import/Export</c>、<c>Sys.Org.Import/Export</c>、
+/// <c>Sys.Code.Import/Export</c>、<c>Chg.Apply.Export</c>、<c>Chg.Audit.Export</c>），
+/// 后果是权限管理页出现"**勾了却不影响任何行为**"的开关 ——
+/// 管理员据此以为已经能导入了。后来是实现了才重新声明、没实现的直接删掉。
+/// <c>tools/check-permissions-sync.mjs</c> 第 7 节现在会在 CI 里拦住这一类：
+/// 新声明一个没有执行点的权限码会**直接失败**。
+///
+/// **例外（务必先读再改）**：确实有一批权限码是**菜单级**的 ——
+/// 它们只决定菜单是否可见，对应的读接口只要求登录（能看多少另由数据范围约束）。
+/// 两类情形，理由不同：
+///   - 本系统自己的读接口（<c>Sys.Module.Query</c> / <c>Sys.Code.Query</c> /
+///     <c>Sys.Org.Query</c> / <c>Chg.Type.Query</c>）：这些数据被**低权限页面复用**
+///     （码值下拉、学校下拉、异动类型），按 Query 码卡接口会让"要录学生、传照片"的
+///     教师一起 403 —— 那是把"能不能进后台页"错当成了"能不能读这份参照数据"；
+///   - 接口在 **ABP 自带控制器**上（<c>Sys.Role.*</c> / <c>Sys.User.*</c> /
+///     <c>Sys.Permission.*</c>）：那些控制器判的是 <c>AbpIdentity.*</c>，
+///     本组业务码只决定菜单能否看见（理由详见下面 <c>Sys.Role</c> 的注释）。
+/// 这些码连同理由都登记在脚本的 <c>MENU_ONLY_PERMISSIONS</c> 白名单里；
+/// 一旦其中某个码真的有了执行点，脚本会提醒把白名单条目删掉。
 /// </summary>
 public static class MetadataPermissions
 {
