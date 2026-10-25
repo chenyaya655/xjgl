@@ -1,3 +1,5 @@
+using Xjgl.Storage;
+
 namespace Xjgl.Changes;
 
 /// <summary>
@@ -128,25 +130,12 @@ public sealed class FileSystemChangeAttachmentStore : IChangeAttachmentStore
     /// <summary>
     /// 相对路径 → 绝对路径，并阻止路径穿越。
     ///
-    /// 与 <c>FileSystemPhotoStorage.ResolvePath</c> / <c>FileSystemExportArtifactStore.ResolvePath</c>
-    /// 同一做法：路径虽然由服务端生成，但它**经过数据库**——运维改库、数据迁移
+    /// 与 <c>FileSystemPhotoStorage</c> / <c>FileSystemExportArtifactStore</c>
+    /// **共用同一份校验**（<see cref="SafePath.ResolveWithin"/>）：
+    /// 路径虽然由服务端生成，但它**经过数据库**——运维改库、数据迁移
     /// 都可能让 <c>RelativePath</c> 变成 <c>../../appsettings.json</c>。
     /// 在校验上不能假设"库里的值一定是干净的"。
     /// </summary>
-    private string ResolvePath(string relativePath)
-    {
-        if (string.IsNullOrWhiteSpace(relativePath))
-        {
-            throw new ArgumentException("附件相对路径不能为空。", nameof(relativePath));
-        }
-
-        var combined = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
-
-        if (!combined.StartsWith(_rootPath, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"非法的附件路径「{relativePath}」：超出存储根目录。");
-        }
-
-        return combined;
-    }
+    private string ResolvePath(string relativePath) =>
+        SafePath.ResolveWithin(_rootPath, relativePath, "附件路径");
 }

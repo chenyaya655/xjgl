@@ -1,5 +1,6 @@
 using Volo.Abp.Domain.Entities.Auditing;
 using Xjgl.Entities;
+using Xjgl.Storage;
 
 namespace Xjgl.Photos;
 
@@ -220,25 +221,15 @@ public class FileSystemPhotoStorage : IPhotoStorage, IPhotoBlobReader
     }
 
     /// <summary>
-    /// 把相对路径解析为绝对路径，并阻止路径穿越（../../ 之类的写法）。
+    /// 把相对路径解析为绝对路径，并阻止路径穿越。
+    ///
+    /// 校验本体在 <see cref="SafePath.ResolveWithin"/>（三处存储共用同一份实现）。
+    /// 原先这里只做 `combined.StartsWith(_rootPath)` 前缀比较，而 `_rootPath` **不带
+    /// 结尾分隔符** —— 于是 `../photos-evil/x.jpg` 这种"兄弟目录前缀"的写法能通过校验，
+    /// 读写都"成功"，实际已经跑到根目录外面。详见 <see cref="SafePath"/> 的类注释。
     /// </summary>
-    private string ResolvePath(string relativePath)
-    {
-        if (string.IsNullOrWhiteSpace(relativePath))
-        {
-            throw new ArgumentException("相对路径不能为空。", nameof(relativePath));
-        }
-
-        var combined = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
-
-        // 必须落在根目录之内，否则视为非法路径
-        if (!combined.StartsWith(_rootPath, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"非法的照片路径「{relativePath}」：超出存储根目录。");
-        }
-
-        return combined;
-    }
+    private string ResolvePath(string relativePath) =>
+        SafePath.ResolveWithin(_rootPath, relativePath, "照片路径");
 }
 
 /// <summary>

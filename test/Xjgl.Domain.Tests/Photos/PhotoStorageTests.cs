@@ -175,7 +175,44 @@ public class FileSystemPhotoStorageTests : IDisposable
 
         await Should.ThrowAsync<InvalidOperationException>(async () => await storage.ExistsAsync("../../etc/passwd"));
         await Should.ThrowAsync<InvalidOperationException>(async () => await storage.DeleteAsync("../x.jpg"));
-        await Should.ThrowAsync<InvalidOperationException>(async () => await storage.OpenReadAsync("..\\x.jpg"));
+        await Should.ThrowAsync<InvalidOperationException>(async () => await storage.OpenReadAsync("../x.jpg"));
+
+        // ⚠ 反斜杠**只在 Windows 上是路径分隔符**。在 Linux 上它是合法文件名字符，
+        //   `..\x.jpg` 只是根目录下一个名字里带反斜杠的普通文件 —— 根本不算穿越，
+        //   断言它必须抛异常的话，这条用例在 Linux / CI 上必红（此前一直没有在 Linux 上跑过）。
+        if (OperatingSystem.IsWindows())
+        {
+            await Should.ThrowAsync<InvalidOperationException>(
+                async () => await storage.OpenReadAsync("..\\x.jpg"));
+        }
+        else
+        {
+            (await storage.OpenReadAsync("..\\x.jpg")).ShouldBeNull(
+                "Linux 上反斜杠是合法文件名字符：这个路径是根目录里的一个不存在的文件，应返回 null 而不是抛异常");
+        }
+    }
+
+    [Fact]
+    public async Task 路径穿越_兄弟目录只是名字前缀相同也必须被拒绝()
+    {
+        // ★ 回归：这个洞是真实存在的，且**不会报任何错**。
+        //   根目录 <temp>/xjgl-photo-test-<guid>，相对路径
+        //   ../xjgl-photo-test-<guid>-evil/x.jpg 会解析成
+        //   <temp>/xjgl-photo-test-<guid>-evil/x.jpg ——
+        //   它**以根目录名开头**，用旧的 `StartsWith(根目录)` 判断时会被放行。
+        //   运维建备份目录时的命名（photos / photos-backup）恰好就是这种形状。
+        var storage = CreateStorage();
+
+        var escape = $"../{Path.GetFileName(_root)}-evil/x.jpg";
+
+        await Should.ThrowAsync<InvalidOperationException>(async () => await storage.ExistsAsync(escape));
+        await Should.ThrowAsync<InvalidOperationException>(async () => await storage.DeleteAsync(escape));
+        await Should.ThrowAsync<InvalidOperationException>(async () => await storage.OpenReadAsync(escape));
+
+        var write = await storage.WriteAsync(escape, Content());
+
+        write.Success.ShouldBeFalse();
+        write.Error!.ShouldContain("超出存储根目录");
     }
 
     [Fact]

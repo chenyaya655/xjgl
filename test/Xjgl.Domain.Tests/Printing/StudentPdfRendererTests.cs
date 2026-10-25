@@ -245,7 +245,17 @@ public class StudentPdfRendererTests
 
         registry.RareCharacterFontAvailable.ShouldBeFalse();
         registry.RareCharacterFontFamily.ShouldBeNull("字体不可用时不该登记字体族，否则只会在日志里刷警告");
-        registry.DefaultFontFamily.ShouldBe(TestFontFamily, "默认字体族必须含中文，否则中文会整片变方块");
+
+        // ⚠ 这里断言的是**代码内置的默认值**，不是 `TestFontFamily`。
+        //   `XJGL_PRINT_FONT` 只有测试工程读（CI 里设成 "Noto Sans CJK SC"），
+        //   应用进程**根本不读它**（见 deploy/fonts.md 的"两处常见误解"）。
+        //   配置为空时 `PrintFontRegistry` 保留的就是代码里的默认值。
+        //   原先写成 `ShouldBe(TestFontFamily)`，在 Windows 上恰好两者相同所以一直绿，
+        //   到 Linux/CI 上必红 —— 而 CI 此前从未真正跑过这一轮。
+        registry.DefaultFontFamily.ShouldBe(
+            "Microsoft YaHei",
+            "未配置时的内置默认值必须是一个**含中文**的字体族，否则中文会整片变方块");
+
         registry.UseSystemFonts.ShouldBeTrue("默认走系统字体：本系统部署在教育系统的 Windows 服务器上，中文字体必然存在");
     }
 
